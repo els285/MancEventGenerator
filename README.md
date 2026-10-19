@@ -27,6 +27,14 @@ MEG needs [pixi](https://pixi.sh). It installs every tool from conda-forge and l
 (`pixi.lock`, for `linux-64` and `osx-arm64`), so everyone gets the same MG5, Pythia8, Herwig7 and
 Delphes builds.
 
+If you do not have pixi yet, install it first (macOS and Linux), then open a new terminal:
+
+```
+curl -fsSL https://pixi.sh/install.sh | sh
+```
+
+Then install MEG:
+
 ```
 git clone https://github.com/els285/MancEventGenerator.git MEG
 cd MEG
