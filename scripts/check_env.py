@@ -45,7 +45,13 @@ def main() -> int:
     print("\nCommand-line tools")
     need("lhapdf-config", ["lhapdf-config", "--version"])
     need("lhapdf")
-    need("fastjet-config", ["fastjet-config", "--version"])
+    if shutil.which("fastjet-config"):
+        need("fastjet-config", ["fastjet-config", "--version"])
+    else:
+        msg = ("fastjet-config not in the environment (not provided by conda-forge in a usable "
+               "form); MG5 should fall back to its bundled fjcore")
+        WARNS.append(msg)
+        print(f"  WARN  {msg}")
     pc = need("pythia8-config", ["pythia8-config", "--version"])
     need("gfortran", ["gfortran", "--version"])
     need("gcc", ["gcc", "--version"])
@@ -82,7 +88,10 @@ def main() -> int:
             line = next((ln for ln in vfile.read_text().splitlines() if ln.startswith("version")), "")
             print(f"  info  {line}")
         for model in ("sm", "loop_sm-no_b_mass"):
-            ok = (root / "models" / model).exists()
+            # "loop_sm-no_b_mass" is the directory models/loop_sm plus restrict_no_b_mass.dat
+            base, _, restriction = model.partition("-")
+            mdir = root / "models" / base
+            ok = mdir.is_dir() and (not restriction or (mdir / f"restrict_{restriction}.dat").exists())
             print(f"  {'ok  ' if ok else 'WARN'}  model {model:18} {'bundled' if ok else 'not in MG5 tree (smoke test will need it)'}")
             if not ok:
                 WARNS.append(f"model {model} not bundled in {root}/models")

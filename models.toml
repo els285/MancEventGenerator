@@ -1,0 +1,62 @@
+# Registry of UFO models the pipeline can fetch (scripts/fetch_model.py).
+# A source is pinned to a full commit SHA (git) or an archive sha256 (url); tags are not accepted
+# because they can move. models.lock records the content hash of what was actually fetched.
+#
+#   [models.<Name>]          <Name>: letters, digits, '_' and '.' only (no '-': MG5 reads the last
+#                            '-' of a model path as the restriction, e.g. <path>-massless)
+#   git = "<repo url>"       with  rev = "<40-hex commit>"
+#   url = "<archive url>"    with  sha256 = "<hex>"
+#   subdir = "<path>"        folder inside the source that holds the UFO (optional)
+#
+# SMEFTsim 3.0.2 (commit below = tag v3.0.2). Restrictions shipped with each UFO: massless,
+# SMlimit_massless. License: see the SMEFTsim repository.
+
+[models.SMEFTsim_general_MwScheme_UFO]
+git = "https://github.com/SMEFTsim/SMEFTsim"
+rev = "db7d4a80bdcff424eee27dde71f1eb09ac894039"
+subdir = "UFO_models/SMEFTsim_general_MwScheme_UFO"
+
+[models.SMEFTsim_general_alphaScheme_UFO]
+git = "https://github.com/SMEFTsim/SMEFTsim"
+rev = "db7d4a80bdcff424eee27dde71f1eb09ac894039"
+subdir = "UFO_models/SMEFTsim_general_alphaScheme_UFO"
+
+[models.SMEFTsim_MFV_MwScheme_UFO]
+git = "https://github.com/SMEFTsim/SMEFTsim"
+rev = "db7d4a80bdcff424eee27dde71f1eb09ac894039"
+subdir = "UFO_models/SMEFTsim_MFV_MwScheme_UFO"
+
+[models.SMEFTsim_MFV_alphaScheme_UFO]
+git = "https://github.com/SMEFTsim/SMEFTsim"
+rev = "db7d4a80bdcff424eee27dde71f1eb09ac894039"
+subdir = "UFO_models/SMEFTsim_MFV_alphaScheme_UFO"
+
+[models.SMEFTsim_U35_MwScheme_UFO]
+git = "https://github.com/SMEFTsim/SMEFTsim"
+rev = "db7d4a80bdcff424eee27dde71f1eb09ac894039"
+subdir = "UFO_models/SMEFTsim_U35_MwScheme_UFO"
+
+[models.SMEFTsim_U35_alphaScheme_UFO]
+git = "https://github.com/SMEFTsim/SMEFTsim"
+rev = "db7d4a80bdcff424eee27dde71f1eb09ac894039"
+subdir = "UFO_models/SMEFTsim_U35_alphaScheme_UFO"
+
+[models.SMEFTsim_top_MwScheme_UFO]
+git = "https://github.com/SMEFTsim/SMEFTsim"
+rev = "db7d4a80bdcff424eee27dde71f1eb09ac894039"
+subdir = "UFO_models/SMEFTsim_top_MwScheme_UFO"
+
+[models.SMEFTsim_top_alphaScheme_UFO]
+git = "https://github.com/SMEFTsim/SMEFTsim"
+rev = "db7d4a80bdcff424eee27dde71f1eb09ac894039"
+subdir = "UFO_models/SMEFTsim_top_alphaScheme_UFO"
+
+[models.SMEFTsim_topU3l_MwScheme_UFO]
+git = "https://github.com/SMEFTsim/SMEFTsim"
+rev = "db7d4a80bdcff424eee27dde71f1eb09ac894039"
+subdir = "UFO_models/SMEFTsim_topU3l_MwScheme_UFO"
+
+[models.SMEFTsim_topU3l_alphaScheme_UFO]
+git = "https://github.com/SMEFTsim/SMEFTsim"
+rev = "db7d4a80bdcff424eee27dde71f1eb09ac894039"
+subdir = "UFO_models/SMEFTsim_topU3l_alphaScheme_UFO"

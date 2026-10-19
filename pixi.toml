@@ -11,7 +11,9 @@
 name = "madlad-conda-spike"
 version = "0.1.0"
 channels = ["conda-forge"]
-platforms = ["linux-64"]   # add "linux-aarch64" once linux-64 passes
+# Note: pixi solves ALL listed platforms when it writes pixi.lock. If one package is missing
+# for a platform, the solve fails for everyone, so add platforms one at a time.
+platforms = ["linux-64", "osx-arm64"]   # later: "linux-aarch64", "osx-64"
 
 [dependencies]
 python = "3.11.*"
@@ -19,7 +21,10 @@ numpy = "*"
 uproot = "*"            # reads the Delphes ROOT output without needing ROOT itself
 pythia8 = ">=8.3"
 lhapdf = ">=6.5"
-fastjet = ">=3.4"
+# FastJet is deliberately not listed. On conda-forge `fastjet` is the Python bindings, and the
+# `fastjet-cxx` 3.5.2 build ships only three runtime libraries (no headers, no fastjet-config),
+# so it cannot stand in for the C++ FastJet that MadLAD builds from source. MG5 should fall back
+# to its bundled fjcore; see README.
 delphes = ">=3.5"
 hepmc2 = "*"
 # MG5 NLO compiles process-specific Fortran at run time and links it against the libraries
@@ -31,13 +36,26 @@ make = "*"
 patch = "*"
 wget = "*"
 curl = "*"
+# GNU userland and bash 5, so the scripts behave the same on Linux and macOS.
+# macOS ships BSD sha256/gzip/sed/readlink and bash 3.2.
+bash = "*"
+coreutils = "*"
+gzip = "*"
+sed = "*"
+tar = "*"
 
 [feature.condamg.dependencies]
 mg5amcnlo = "*"
 # [feature.condamg] channels = ["conda-forge", "<channel-that-hosts-mg5amcnlo>"]
 
+# Herwig 7 shower for the LO + Herwig stage. Separate environment and solve group so a version clash
+# (Boost, HepMC, ThePEG) cannot disturb the working conda-mg5 environment.
+[feature.herwig.dependencies]
+herwig = "*"
+
 [environments]
 conda-mg5 = { features = ["condamg"], solve-group = "conda-mg5" }
+conda-herwig = { features = ["condamg", "herwig"], solve-group = "conda-herwig" }
 
 [tasks]
 check      = "python scripts/check_env.py"
@@ -45,5 +63,13 @@ fetch-mg5  = "bash scripts/fetch_mg5_tarball.sh"     # fallback path only
 setup-mg5  = "bash scripts/setup_mg5.sh"             # point MG5 at the env's pythia8/lhapdf/fastjet
 pdfs       = "bash scripts/fetch_pdfs.sh"            # PDF sets into ./cache/lhapdf
 smoke-lo   = { cmd = "bash scripts/smoke.sh lo",  depends-on = ["setup-mg5", "pdfs"] }
+smoke-lo-py8 = { cmd = "bash scripts/smoke.sh lo-py8", depends-on = ["setup-mg5", "pdfs"] }   # LO + Pythia8 shower
 smoke-nlo  = { cmd = "bash scripts/smoke.sh nlo", depends-on = ["setup-mg5", "pdfs"] }
+# Herwig 7 stages: run these in the conda-herwig environment (pixi run -e conda-herwig ...).
+# Herwig 7.3 defaults to CT14lo/CT14nlo for its own PDFs, and needs the sets the MG5 events used.
+pdfs-hw7      = "bash scripts/fetch_pdfs.sh CT14lo CT14nlo NNPDF23_lo_as_0130_qed NNPDF30_nlo_as_0118"
+smoke-lo-hw7  = { cmd = "bash scripts/smoke.sh lo-hw7",  depends-on = ["setup-mg5", "pdfs-hw7"] }
+smoke-nlo-hw7 = { cmd = "bash scripts/smoke.sh nlo-hw7", depends-on = ["setup-mg5", "pdfs-hw7"] }
 smoke      = { cmd = "bash scripts/smoke.sh all", depends-on = ["check", "setup-mg5", "pdfs"] }
+mg5        = { cmd = "bash scripts/mg5.sh", depends-on = ["setup-mg5"] }   # interactive MG5 prompt; output in ./work
+fetch-model = "python scripts/fetch_model.py"   # pixi run fetch-model SMEFTsim_U35_alphaScheme_UFO  (or --list)

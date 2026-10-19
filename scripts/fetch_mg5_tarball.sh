@@ -20,7 +20,7 @@ fi
 log "Downloading $URL"
 wget -q --show-progress -O "$TARBALL" "$URL" || die "download failed (is launchpad reachable from here?)"
 
-actual="$(sha256sum "$TARBALL" | cut -d' ' -f1)"
+actual="$(sha256_of "$TARBALL")"
 if [[ -f "$SHAFILE" ]]; then
   expected="$(cut -d' ' -f1 "$SHAFILE")"
   [[ "$actual" == "$expected" ]] || die "sha256 mismatch for MG5 ${VERSION}: got $actual, pinned $expected"

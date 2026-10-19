@@ -15,11 +15,17 @@ CFG="$MG5_DIR/input/mg5_configuration.txt"
 OPTS=(
   "pythia8_path=$CONDA_PREFIX"
   "lhapdf_py3=$CONDA_PREFIX/bin/lhapdf-config"
-  "fastjet=$CONDA_PREFIX/bin/fastjet-config"
   "delphes_path=$CONDA_PREFIX"
   "automatic_html_opening=False"
   "auto_update=0"
 )
+
+# Only point MG5 at FastJet if the environment really has fastjet-config; otherwise MG5 uses fjcore.
+if [[ -x "$CONDA_PREFIX/bin/fastjet-config" ]]; then
+  OPTS+=("fastjet=$CONDA_PREFIX/bin/fastjet-config")
+else
+  warn "No fastjet-config in the environment; leaving MG5's FastJet option unset (bundled fjcore)."
+fi
 
 if [[ -w "$CFG" ]]; then
   log "Editing $CFG"
@@ -42,4 +48,6 @@ else
   "$MG5_BIN" "$cmds" || die "mg5amc_py8_interface install failed - this is a key spike finding, keep the log."
   rm -f "$cmds"
 fi
+# The conda-packaged Pythia8 interface binary has a relative rpath that breaks when MG5 copies it.
+bash "$SPIKE_ROOT/scripts/fix_rpath.sh"
 log "MG5 configured."

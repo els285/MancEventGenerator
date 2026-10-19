@@ -18,8 +18,18 @@ is exercised too.
 
 ## Run it
 
-Needs [pixi](https://pixi.sh), a Linux machine (x86_64) and network access to conda-forge,
-Launchpad (MG5, py8 interface) and `lhapdfsets.web.cern.ch` (PDF set).
+Needs [pixi](https://pixi.sh) and network access to conda-forge, Launchpad (MG5, py8
+interface) and `lhapdfsets.web.cern.ch` (PDF set).
+
+Platforms declared in `pixi.toml`: `linux-64` and `osx-arm64` (Apple Silicon). Windows is
+supported through WSL2, which is just `linux-64`. Intel Macs (`osx-64`) and `linux-aarch64`
+are not declared yet; add them one at a time with `pixi workspace platform add <platform>`,
+because pixi solves every listed platform at once and one missing package fails the lot.
+
+**macOS:** install the Xcode command line tools first (`xcode-select --install`). The conda
+compilers still link against the Apple SDK. The scripts use GNU coreutils and bash 5 from the
+conda environment, so they behave the same as on Linux. For serious production runs use Linux
+or your cluster; the Mac route is for development and testing.
 
 ```bash
 # Path A (fallback, most likely to work): conda-forge toolchain + pinned MG5 tarball
@@ -77,11 +87,26 @@ delphes/ATLAS_sim_FASTJET.tcl   from tzuhanchang/MadLAD
 
 ## Status and known gaps
 
-- **Not yet run end to end.** It was written in a sandbox with no route to conda-forge, so the
-  environment solve and the MG5/Pythia8/Delphes runs have not been executed. Shell and Python
-  syntax and the card and manifest helpers were tested offline; see the commit notes.
-- Package availability on conda-forge was not confirmed for `pythia8`, `lhapdf`, `fastjet`
-  and `hepmc2` (assumed from memory). The `mg5amcnlo` package's contents are unverified.
+- **Not yet run end to end.** The `linux-64` environment solve has succeeded for both
+  environments (see `pixi.lock`: pythia8 8.312, lhapdf 6.5.6, delphes 3.5.1,
+  hepmc2 2.06.11, mg5amcnlo 3.5.7, gcc/gfortran 15.3), but the MG5/Pythia8/Delphes runs have
+  not been executed. Shell and Python syntax and the card and manifest helpers were tested
+  offline.
+- Package availability on `osx-arm64` is unconfirmed (`delphes` is known to list it). The
+  `mg5amcnlo` package solves on linux-64, but its contents (NLO, bundled models, py8
+  interface) are unverified until the smoke test runs.
+- `osx-arm64` is the least tested route: MG5 NLO compiling Fortran with conda's gfortran on
+  Apple Silicon is the most likely thing to need adjustment.
+- The `conda-mg5` environment also installs the conda package `mg5amcnlo-pythia8-interface`
+  (seen in `pixi.lock`), so the source `install mg5amc_py8_interface` step in
+  `scripts/setup_mg5.sh` may be redundant there. If `setup-mg5` is slow or fails in that
+  environment, try skipping the install and see whether the NLO stage finds the interface.
+- **FastJet.** conda-forge's `fastjet` is the Python bindings, and the `fastjet-cxx` 3.5.2
+  build ships only three runtime libraries (no headers, no `fastjet-config`), so the C++
+  FastJet that MadLAD builds from source is not available from conda-forge in a usable form.
+  This spike does not require it: MG5 should fall back to its bundled fjcore, and the Delphes
+  card in the smoke test is the real check on jet finding. If a later feature needs full
+  FastJet (FxFx merging, Delphes with external FastJet), build a small conda recipe for it.
 - The MG5 command sequence (`launch <dir> -f` taking the shower from `run_card.dat`) follows
   MadLAD's approach but has not been exercised here; `scripts/smoke.sh` fails loudly with a hint
   if the shower does not run.
