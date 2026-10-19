@@ -18,9 +18,10 @@ from meg.util import MegError
 SRC = Path(__file__).resolve().parents[1] / "src"
 
 
-def bcfg(*over, name="camp", executor="local"):
+def bcfg(*over, name="camp", executor="local", build_once=False):
     return meg.load_config(None, [f'run.name="{name}"', "generation.events=7", 'shower.kind="pythia8"',
-                                  f'execution.executor="{executor}"', "execution.campaign_dir=\"camps\"", *over])
+                                  f'execution.executor="{executor}"', "execution.campaign_dir=\"camps\"",
+                                  f"execution.build_once={'true' if build_once else 'false'}", *over])
 
 
 @pytest.fixture
@@ -39,9 +40,12 @@ def fake_condor(tmp_path, monkeypatch, toolchain):
                      "echo '5000 job(s) submitted to cluster 4242.'\n")
     q = d / "condor_q"
     q.write_text(f"#!/bin/sh\necho \"$@\" >> {log}\ncat {tmp_path}/queue.json\n")
+    dag = d / "condor_submit_dag"
+    dag.write_text(f"#!/bin/sh\necho \"dag $@ cwd=$(pwd)\" >> {log}\n"
+                   "echo '1 job(s) submitted to cluster 777.'\n")
     rm = d / "condor_rm"
     rm.write_text(f"#!/bin/sh\necho \"rm $@\" >> {log}\necho removed\n")
-    for f in (sub_s, q, rm):
+    for f in (sub_s, q, rm, dag):
         f.chmod(f.stat().st_mode | stat.S_IEXEC)
     (tmp_path / "queue.json").write_text("[]")
     monkeypatch.setenv("PATH", f"{d}:{os.environ['PATH']}")
@@ -320,3 +324,204 @@ def test_generated_job_script_works_from_an_empty_scratch_dir(toolchain, fake_co
     assert json.loads((scratch / "outbox" / "status.json").read_text())["seed"] == 9
     # MEG_OFFLINE came from env.sh: the job did not need the network
     assert "MEG_OFFLINE=1" in (c.dir / "env.sh").read_text()
+
+
+# =========================================================================== build the process once
+
+def test_make_relocatable_and_relocate(tmp_path):
+    from meg import process_dir
+    root = tmp_path / "build" / "proc"
+    (root / "lib").mkdir(parents=True)
+    (root / "Cards").mkdir()
+    outside = tmp_path / "env" / "lib"
+    outside.mkdir(parents=True)
+    (outside / "libx.a").write_text("x")
+    os.symlink(os.path.relpath(outside / "libx.a", root / "lib"), root / "lib" / "out.a")      # leaves the tree
+    (root / "Cards" / "a.dat").write_text("x")
+    os.symlink("a.dat", root / "Cards" / "inside.dat")                                         # stays inside
+    (root / "Cards" / "conf.txt").write_text(f"dir = {root}\n")
+    (root / "Cards" / "blob.bin").write_bytes(b"\0\1" + str(root).encode())
+    assert process_dir.make_relocatable(root) == 1
+    assert os.readlink(root / "lib" / "out.a") == str(outside / "libx.a")
+    assert os.readlink(root / "Cards" / "inside.dat") == "a.dat"
+    assert process_dir.relocate(root, str(root), "/new/place/proc") == 1                # the text file only
+    assert (root / "Cards" / "conf.txt").read_text() == "dir = /new/place/proc\n"
+    assert str(root).encode() in (root / "Cards" / "blob.bin").read_bytes()
+    assert process_dir.relocate(root, "/same", "/same") == 0
+
+
+def test_prepare_then_replica_from_the_prebuilt_process(toolchain, tmp_path, monkeypatch):
+    from meg.batch import prepare
+    cfg = bcfg()
+    meta, conf = _meta_files(tmp_path, cfg)
+    (tmp_path / "campaign.json").write_text(json.dumps({"id": campaign_id(cfg), "offline": False, "seeds": [1, 2]}))
+    pre = tmp_path / "pre"
+    assert prepare.run_prepare(meta, conf, pre) == 0
+    st = json.loads((pre / "status.json").read_text())
+    assert st["state"] == "ok" and st["bytes"] > 0 and (pre / "process.tar.gz").is_file()
+    deep = tmp_path / "node" / "scratch" / "dir"            # a different depth than where it was built:
+    deep.mkdir(parents=True)                                # relative symlinks would dangle without relocation
+    monkeypatch.setenv("TMPDIR", str(deep))
+    ob = tmp_path / "ob"
+    assert job.run_replica(meta, conf, 5, ob, pre / "process.tar.gz") == 0
+    assert json.loads((ob / "status.json").read_text())["state"] == "ok"
+    import tarfile
+    with tarfile.open(ob / f"{campaign_id(cfg)}_s0005.logs.tar.gz") as t:
+        names = t.getnames()
+    assert any(n.endswith("launch.log") for n in names) and not any(n.endswith("proc.log") for n in names)
+    with tarfile.open(pre / f"{campaign_id(cfg)}_prepare.logs.tar.gz") as t:
+        assert any(n.endswith("proc.log") for n in t.getnames())
+
+
+def test_replica_seed_is_applied_to_a_prebuilt_process(toolchain, tmp_path):
+    from meg.batch import prepare
+    cfg = bcfg()
+    meta, conf = _meta_files(tmp_path, cfg)
+    (tmp_path / "campaign.json").write_text(json.dumps({"id": campaign_id(cfg), "offline": False, "seeds": [1]}))
+    prepare.run_prepare(meta, conf, tmp_path / "pre")
+    for seed in (11, 12):
+        assert job.run_replica(meta, conf, seed, tmp_path / f"ob{seed}", tmp_path / "pre" / "process.tar.gz") == 0
+    import tarfile
+    for seed in (11, 12):
+        with tarfile.open(tmp_path / f"ob{seed}" / f"{campaign_id(cfg)}_s{seed:04d}.logs.tar.gz") as t:
+            rc = next(n for n in t.getnames() if n.endswith("run_card.dat"))
+            body = t.extractfile(rc).read().decode()
+        assert f" {seed} = iseed" in body
+
+
+def test_local_campaign_builds_the_process_once(local_env):
+    c = sub.submit(bcfg("execution.replicas=3", "execution.seed_start=30", build_once=True))
+    text, by = sub.status_text(c)
+    assert len(by["ok"]) == 3 and "process build: ok" in text
+    assert (c.dir / "prepare" / "outbox" / "process.tar.gz").is_file()
+    import tarfile
+    built = 0
+    for s in (30, 31, 32):
+        with tarfile.open(c.outbox(s) / f"{c.id}_{tag(s)}.logs.tar.gz") as t:
+            built += sum(n.endswith("proc.log") for n in t.getnames())
+    assert built == 0                                           # no replica generated the process itself
+    assert col.collect(c)["ok"] == 3
+
+
+def test_failed_build_stops_a_local_campaign_early(local_env, monkeypatch):
+    monkeypatch.setenv("FAKE_MG5_NO_PROCESS", "1")
+    with pytest.raises(MegError, match="building the MG5 process failed"):
+        sub.submit(bcfg("execution.replicas=3", build_once=True))
+
+
+def test_htcondor_dag_files(toolchain, fake_condor, monkeypatch):
+    monkeypatch.delenv("PIXI_PROJECT_ROOT", raising=False)
+    c = sub.submit(bcfg("execution.replicas=3", "execution.cores=2", executor="htcondor", build_once=True),
+                   dry_run=True)
+    assert (c.dir / "campaign.dag").read_text() == (
+        "# PREPARE builds the MG5 process once; REPLICAS (one job per seed) start when it has succeeded\n"
+        "JOB PREPARE prepare.sub\nJOB REPLICAS submit.sub\nPARENT PREPARE CHILD REPLICAS\n")
+    prep = (c.dir / "prepare.sub").read_text()
+    assert "executable" in prep and "prepare.sh" in prep and f"initialdir = {c.dir / 'prepare'}" in prep
+    assert "request_cpus = 2" in prep and prep.rstrip().endswith("queue")
+    assert "meg _prepare" in (c.dir / "prepare.sh").read_text()
+    archive = c.dir / "prepare" / "outbox" / "process.tar.gz"
+    assert f"{archive}" in (c.dir / "submit.sub").read_text().split("transfer_input_files = ")[1].splitlines()[0]
+    assert "arguments = $(seed)\n" in (c.dir / "submit.sub").read_text()
+    # by path instead of transferring it to every job
+    c2 = sub.submit(bcfg("execution.replicas=3", "execution.process_transfer=false", executor="htcondor",
+                         build_once=True, name="bypath"), dry_run=True)
+    text = (c2.dir / "submit.sub").read_text()
+    assert f"arguments = $(seed) {c2.dir / 'prepare' / 'outbox' / 'process.tar.gz'}" in text
+    assert "process.tar.gz" not in text.split("transfer_input_files = ")[1].splitlines()[0]
+    assert not fake_condor.exists()
+
+
+def test_htcondor_dag_submission_and_status(toolchain, fake_condor, tmp_path, monkeypatch):
+    monkeypatch.delenv("PIXI_PROJECT_ROOT", raising=False)
+    c = sub.submit(bcfg("execution.replicas=3", "execution.seed_start=5", executor="htcondor", build_once=True))
+    calls = fake_condor.read_text()
+    assert "dag -f campaign.dag" in calls and f"cwd={c.dir}" in calls and "submit.sub" not in calls.split("dag")[0]
+    assert c.meta["submissions"][0]["dag_cluster"] == 777
+    q = tmp_path / "queue.json"
+    # the PREPARE job is queued; no replica jobs exist yet
+    q.write_text(json.dumps([{"JobStatus": 1}]))
+    states, _ = sub.seed_states(c)
+    assert {v[0] for v in states.values()} == {"waiting"}
+    assert "process build: not finished yet" in sub.status_text(c)[0]
+    # PREPARE finished, replicas running / held
+    (c.dir / "prepare" / "outbox").mkdir(parents=True)
+    (c.dir / "prepare" / "outbox" / "status.json").write_text(json.dumps({"state": "ok"}))
+    q.write_text(json.dumps([{"Args": "5", "JobStatus": 2}, {"Args": "6", "JobStatus": 5, "HoldReason": "no disk"},
+                             {"Args": "7", "JobStatus": 1}]))
+    states, _ = sub.seed_states(c)
+    assert [states[s][0] for s in (5, 6, 7)] == ["running", "held", "idle"]
+    # PREPARE finished, DAGMan gone, nothing queued, no results: lost
+    q.write_text("[]")
+    assert {v[0] for v in sub.seed_states(c)[0].values()} == {"lost"}
+    assert sub.cancel(c) == [777] and "rm 777" in fake_condor.read_text()
+
+
+def test_failed_prepare_blocks_replicas_and_resubmit_rebuilds(toolchain, fake_condor, tmp_path, monkeypatch):
+    monkeypatch.delenv("PIXI_PROJECT_ROOT", raising=False)
+    c = sub.submit(bcfg("execution.replicas=3", "execution.seed_start=1", executor="htcondor", build_once=True))
+    (c.dir / "prepare" / "outbox").mkdir(parents=True)
+    (c.dir / "prepare" / "outbox" / "status.json").write_text(
+        json.dumps({"state": "failed", "error": "StageError: no diagrams"}))
+    (tmp_path / "queue.json").write_text("[]")
+    states, _ = sub.seed_states(c)
+    assert {v[0] for v in states.values()} == {"blocked"} and "no diagrams" in states[1][1]
+    text = sub.status_text(c)[0]
+    assert "process build: FAILED" in text and "meg resubmit" in text
+    assert sub.resubmit(c) == [1, 2, 3]
+    assert not (c.dir / "prepare" / "outbox").exists()                          # rebuilt from scratch
+    assert (c.dir / "campaign_2.dag").read_text().splitlines()[2] == "JOB REPLICAS submit_2.sub"
+    assert "dag -f campaign_2.dag" in fake_condor.read_text()
+    assert Campaign.load(c.dir).meta["submissions"][1]["dag_cluster"] == 777
+
+
+def test_resubmit_after_a_good_build_only_reruns_replicas(toolchain, fake_condor, tmp_path, monkeypatch):
+    monkeypatch.delenv("PIXI_PROJECT_ROOT", raising=False)
+    c = sub.submit(bcfg("execution.replicas=2", "execution.seed_start=1", executor="htcondor", build_once=True))
+    (c.dir / "prepare" / "outbox").mkdir(parents=True)
+    (c.dir / "prepare" / "outbox" / "status.json").write_text(json.dumps({"state": "ok"}))
+    (c.dir / "prepare" / "outbox" / "process.tar.gz").write_text("x")
+    (tmp_path / "queue.json").write_text("[]")
+    assert sub.resubmit(c) == [1, 2]
+    calls = fake_condor.read_text()
+    assert "submit_2.sub" in calls and "campaign_2.dag" not in calls
+    assert (c.dir / "prepare" / "outbox" / "process.tar.gz").is_file()
+
+
+def test_generated_job_script_uses_the_prebuilt_process(toolchain, fake_condor, tmp_path, monkeypatch):
+    import shutil
+    import subprocess
+    monkeypatch.delenv("PIXI_PROJECT_ROOT", raising=False)
+    monkeypatch.setenv("PYTHONPATH", str(SRC))
+    meg_bin = toolchain / "bin" / "meg"
+    meg_bin.write_text(f"#!/bin/sh\nexec {sys.executable} -m meg \"$@\"\n")
+    meg_bin.chmod(0o755)
+    c = sub.submit(bcfg("execution.replicas=2", executor="htcondor", build_once=True), dry_run=True)
+    env = {k: v for k, v in os.environ.items() if k != "CONDA_PREFIX"} | {"PATH": "/usr/bin:/bin"}
+    # node 1: PREPARE
+    n1 = tmp_path / "node1"
+    n1.mkdir()
+    for f in ("campaign.json", "config.json", "env.sh", "prepare.sh"):
+        shutil.copy(c.dir / f, n1 / f)
+    r = subprocess.run(["bash", "prepare.sh"], cwd=n1, env=env | {"TMPDIR": str(n1)}, capture_output=True, text=True)
+    assert r.returncode == 0, r.stderr[-2000:] + r.stdout[-1500:]
+    assert (n1 / "outbox" / "process.tar.gz").is_file()
+    # node 2: a replica, with the archive transferred in beside the other inputs
+    n2 = tmp_path / "node2"
+    n2.mkdir()
+    for f in ("campaign.json", "config.json", "env.sh", "job.sh"):
+        shutil.copy(c.dir / f, n2 / f)
+    shutil.copy(n1 / "outbox" / "process.tar.gz", n2 / "process.tar.gz")
+    r = subprocess.run(["bash", "job.sh", "1"], cwd=n2, env=env | {"TMPDIR": str(n2)}, capture_output=True, text=True)
+    assert r.returncode == 0, r.stderr[-2000:] + r.stdout[-1500:]
+    import tarfile
+    with tarfile.open(next((n2 / "outbox").glob("*.logs.tar.gz"))) as t:
+        assert not any(n.endswith("proc.log") for n in t.getnames())
+    # node 3: by-path variant, no transfer: the archive is the second argument
+    n3 = tmp_path / "node3"
+    n3.mkdir()
+    for f in ("campaign.json", "config.json", "env.sh", "job.sh"):
+        shutil.copy(c.dir / f, n3 / f)
+    r = subprocess.run(["bash", "job.sh", "2", str(n1 / "outbox" / "process.tar.gz")], cwd=n3,
+                       env=env | {"TMPDIR": str(n3)}, capture_output=True, text=True)
+    assert r.returncode == 0, r.stderr[-2000:] + r.stdout[-1500:]

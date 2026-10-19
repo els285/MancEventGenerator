@@ -11,6 +11,7 @@ import sys
 import threading
 import time
 from concurrent.futures import ThreadPoolExecutor
+from pathlib import Path
 
 from ..util import log
 from .campaign import Campaign, tag
@@ -32,7 +33,23 @@ def _kill(p: subprocess.Popen) -> None:
             pass
 
 
-def run_all(c: Campaign, seeds: list[int], concurrency: int) -> dict[int, int]:
+def run_prepare(c: Campaign) -> int:
+    """Build the campaign's process once, in a subprocess, like the cluster's PREPARE job."""
+    pdir = c.dir / "prepare"
+    pdir.mkdir(exist_ok=True)
+    cmd = [sys.executable, "-m", "meg", "_prepare", "--meta", str(c.meta_path), "--config", str(c.config_path),
+           "--outbox", str(pdir / "outbox")]
+    log.info("building the MG5 process once ...")
+    with open(pdir / "job.out", "w") as out, open(pdir / "job.err", "w") as err:
+        p = subprocess.Popen(cmd, cwd=pdir, stdout=out, stderr=err, stdin=subprocess.DEVNULL, start_new_session=True)
+        try:
+            return p.wait()
+        except KeyboardInterrupt:
+            _kill(p)
+            raise
+
+
+def run_all(c: Campaign, seeds: list[int], concurrency: int, prebuilt: Path | None = None) -> dict[int, int]:
     """Run `seeds` in a pool of `concurrency`; returns seed -> exit status."""
     live: list[subprocess.Popen] = []
     lock = threading.Lock()
@@ -45,6 +62,8 @@ def run_all(c: Campaign, seeds: list[int], concurrency: int) -> dict[int, int]:
         rdir.mkdir(parents=True, exist_ok=True)
         cmd = [sys.executable, "-m", "meg", "_job", "--meta", str(c.meta_path), "--config", str(c.config_path),
                "--seed", str(seed), "--outbox", str(rdir / "outbox")]
+        if prebuilt:
+            cmd += ["--prebuilt", str(prebuilt)]
         with open(rdir / "job.out", "w") as out, open(rdir / "job.err", "w") as err:
             p = subprocess.Popen(cmd, cwd=rdir, stdout=out, stderr=err, stdin=subprocess.DEVNULL,
                                  start_new_session=True)

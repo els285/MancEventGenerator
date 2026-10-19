@@ -204,7 +204,14 @@ def _cmd_cancel(a: argparse.Namespace) -> int:
 def _cmd_job(a: argparse.Namespace) -> int:
     """Internal: run one replica. Called by the job script and by the local executor."""
     from .batch import job
-    return job.run_replica(Path(a.meta), Path(a.config), a.seed, Path(a.outbox))
+    return job.run_replica(Path(a.meta), Path(a.config), a.seed, Path(a.outbox),
+                           Path(a.prebuilt) if a.prebuilt else None)
+
+
+def _cmd_prepare(a: argparse.Namespace) -> int:
+    """Internal: build the campaign's MG5 process once and pack it."""
+    from .batch import prepare
+    return prepare.run_prepare(Path(a.meta), Path(a.config), Path(a.outbox))
 
 
 def _cmd_schema(a: argparse.Namespace) -> int:
@@ -290,7 +297,14 @@ def build_parser() -> argparse.ArgumentParser:
     j.add_argument("--config", required=True)
     j.add_argument("--seed", type=int, required=True)
     j.add_argument("--outbox", required=True)
+    j.add_argument("--prebuilt", help="process archive made by _prepare")
     j.set_defaults(fn=_cmd_job)
+
+    pp = sub.add_parser("_prepare")
+    pp.add_argument("--meta", required=True)
+    pp.add_argument("--config", required=True)
+    pp.add_argument("--outbox", required=True)
+    pp.set_defaults(fn=_cmd_prepare)
 
     sub.add_parser("schema", help="print the JSON Schema of the configuration").set_defaults(fn=_cmd_schema)
 
@@ -303,7 +317,8 @@ def build_parser() -> argparse.ArgumentParser:
 
 def main(argv: list[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
-    if args.fn in (_cmd_generate, _cmd_job):       # `kill <pid>` should stop the tools too, not orphan them
+    # `kill <pid>` (HTCondor's eviction) should stop the tools too, not orphan them
+    if args.fn in (_cmd_generate, _cmd_job, _cmd_prepare):
         signal.signal(signal.SIGTERM, _on_sigterm)
     _setup_logging()
     try:

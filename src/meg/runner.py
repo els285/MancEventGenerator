@@ -145,9 +145,28 @@ def prepare(config: Config) -> None:
         pdf.ensure(s, env)
 
 
-def run(config: Config, *, echo: str = "none", force: bool = False) -> RunResult:
+def build_process(config: Config, out_dir: Path, *, echo: str = "none") -> Path:
+    """Build only the MG5 process directory (model import, diagrams, `output`) under `out_dir` and return
+    it. This is the seed-independent, expensive-to-repeat part of a run; `meg _prepare` packs it so a
+    campaign's replicas can start from it."""
+    env = sysenv.build_env()
+    sysenv.raise_open_file_limit()
+    plan = build_plan(config)
+    mg5 = toolchain.locate_mg5(env)
+    _toolchain_ready(config, env, mg5)
+    fetched = _resolve_model(config, mg5)
+    for s in plan.pdf_sets:
+        pdf.ensure(s, env)
+    out_dir.mkdir(parents=True, exist_ok=True)
+    ctx = RunContext(plan=plan, run_dir=out_dir, env=env, mg5=mg5,
+                     cores=config.execution.cores or sysenv.default_cores(), echo=echo)
+    return generate.build_process(ctx, fetched, ctx.stage_dir("generate"))
+
+
+def run(config: Config, *, echo: str = "none", force: bool = False, prebuilt: Path | None = None) -> RunResult:
     """Run the whole pipeline for `config`. `echo`: none | filtered | all (how much of the tools' own
-    output is shown; the log files always have everything). `force` discards an earlier run in the same directory."""
+    output is shown; the log files always have everything). `force` discards an earlier run in the same directory.
+    `prebuilt` is a process archive from `meg _prepare`: the run then skips building the MG5 process."""
     env = sysenv.build_env()
     sysenv.raise_open_file_limit()
     plan = build_plan(config)
@@ -176,8 +195,8 @@ def run(config: Config, *, echo: str = "none", force: bool = False) -> RunResult
         "process": c.process.model_dump(mode="json"),
         "madspin": c.madspin.model_dump(mode="json"), "gen": c.generation.model_dump(mode="json"),
         "seed": c.run.seed, "switch": plan.mg5_shower_switch, "parton_shower": plan.parton_shower,
-        "py8": c.shower.kind == "pythia8"})
-    _stage(ctx, "generate", gen_hash, lambda: generate.run(ctx, fetched), timings)
+        "py8": c.shower.kind == "pythia8", "prebuilt": prebuilt is not None})
+    _stage(ctx, "generate", gen_hash, lambda: generate.run(ctx, fetched, prebuilt), timings)
     lhe = ctx.out("generate", "lhe")
     events = ctx.out("generate", "hepmc") or lhe
     upstream = gen_hash

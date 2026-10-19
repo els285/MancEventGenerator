@@ -95,8 +95,9 @@ def _write_outputs(cfg: Config, result: runner.RunResult, outbox: Path, cid: str
                 _gzip(src, outbox / unique_name(cid, seed, "hepmc"))
 
 
-def run_replica(meta_path: Path, config_path: Path, seed: int, outbox: Path) -> int:
-    """Run replica `seed`. Returns the process exit status (0 = outputs complete)."""
+def run_replica(meta_path: Path, config_path: Path, seed: int, outbox: Path,
+                prebuilt: Path | None = None) -> int:
+    """Run replica `seed`, starting from the prebuilt process archive if given. Returns the exit status."""
     meta = json.loads(Path(meta_path).read_text())
     base = json.loads(Path(config_path).read_text())
     cid = meta["id"]
@@ -117,7 +118,7 @@ def run_replica(meta_path: Path, config_path: Path, seed: int, outbox: Path) -> 
         data = dict(base)
         data["run"] = {**data["run"], "name": name, "seed": seed, "output_dir": str(scratch)}
         cfg = Config.model_validate(data)
-        result = runner.run(cfg, echo="none")
+        result = runner.run(cfg, echo="none", prebuilt=Path(prebuilt) if prebuilt else None)
         _write_outputs(cfg, result, outbox, cid, seed)
         shutil.copy2(result.manifest_path, outbox / unique_name(cid, seed, "manifest"))
         lhe = result.manifest.get("lhe", {})

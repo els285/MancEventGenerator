@@ -112,6 +112,19 @@ chi2/ndf consistency check.
 works in the node's scratch directory (MG5 writes thousands of small files; shared filesystems are slow
 at that), loads the MEG environment from `env.sh` (generated from `pixi shell-hook`) and runs one replica.
 
+**Building the process once** (`build_once = true`, the default on this branch). Importing the model and
+generating the diagrams (MG5's `output` step) does not depend on the seed, and for NLO it takes minutes.
+`meg submit` therefore sends a DAGMan workflow: a single `PREPARE` job builds the process directory and
+packs it as `process.tar.gz`; when it succeeds, the replica jobs start, unpack it, and only edit the cards
+(with their own seed) and launch. With `build_once = false` every replica builds its own. By default
+HTCondor transfers the archive into each job; with thousands of jobs set `process_transfer = false` so the
+jobs read it by path from the campaign directory (which then must be on a filesystem the nodes can see).
+A process directory is not relocatable as MG5 writes it (it has symlinks relative to where it was built,
+and files that can mention the build path), so MEG makes outward links absolute when packing and rewrites
+the build path when unpacking. If `meg status` shows `blocked`, the build failed: see
+`<campaign>/prepare/outbox/` (status.json and a logs bundle), fix the cause and `meg resubmit` rebuilds
+and reruns. Compiling still happens in each replica (MG5 does it at launch).
+
 **Assumptions.** The repository (with its `.pixi` environment) and the MEG cache (`MEG_CACHE`, default
 `~/.cache/meg`) must be readable from the worker nodes, e.g. on a shared filesystem. The campaign directory
 itself does not need to be visible to the nodes: the three small files a job needs are transferred.

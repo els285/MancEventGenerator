@@ -3,11 +3,12 @@ from __future__ import annotations
 
 import re
 import shutil
+from pathlib import Path
 
-from . import cards, madspin, pdf, proc
+from . import cards, madspin, pdf, proc, process_dir
 from .context import RunContext
 from .models import FetchedModel
-from .util import StageError, gunzip, log
+from .util import MegError, StageError, gunzip, log
 
 PROC = "mg5_proc"
 MG5_FAIL = re.compile(r"interrupted with error|^ERROR")
@@ -60,21 +61,35 @@ def run_card_edits(ctx: RunContext) -> dict:
     return edits
 
 
-def run(ctx: RunContext, fetched: FetchedModel | None) -> dict[str, str | None]:
-    d = ctx.stage_dir("generate")
+def build_process(ctx: RunContext, fetched: FetchedModel | None, d: Path) -> Path:
+    """Import the model, generate the diagrams and `output` the process directory into `d`."""
     shutil.rmtree(d / PROC, ignore_errors=True)
-    echo = ctx.echo
-
     (d / "proc.mg5").write_text("\n".join(process_commands(ctx, fetched)) + "\n")
     proc.run([ctx.mg5.launcher, "proc.mg5"], log_file=d / "proc.log", cwd=d, env=ctx.env,
-             echo=echo, noise=proc.MG5_NOISE, fail_re=MG5_FAIL)
+             echo=ctx.echo, noise=proc.MG5_NOISE, fail_re=MG5_FAIL)
     if not (d / PROC / "Cards").is_dir():
         raise StageError(f"MG5 did not create the process directory {PROC} (see generate/proc.log)")
-
     if not ctx.plan.uses_lhapdf:
         mk = d / PROC / "Source" / "make_opts"
         if mk.exists() and re.search(r"^lhapdf=.", mk.read_text(), re.MULTILINE):
             log.warning("generation.pdf is builtin, but MG5 still enabled LHAPDF (Source/make_opts)")
+    return d / PROC
+
+
+def run(ctx: RunContext, fetched: FetchedModel | None, prebuilt: Path | None = None) -> dict[str, str | None]:
+    """The MG5 stage. With `prebuilt` (a process archive made by `meg _prepare`), the model import and
+    diagram generation are skipped: the process directory is unpacked and only the cards and the launch
+    differ per run."""
+    d = ctx.stage_dir("generate")
+    shutil.rmtree(d / PROC, ignore_errors=True)
+    echo = ctx.echo
+    if prebuilt is not None:
+        try:
+            process_dir.unpack(prebuilt, d)
+        except MegError as e:
+            raise StageError(f"cannot use the prebuilt process {prebuilt}: {e}") from e
+    else:
+        build_process(ctx, fetched, d)
 
     cfg = ctx.plan.config
     if cfg.model.params:

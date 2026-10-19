@@ -72,6 +72,10 @@ def mg5(argv: list[str]) -> None:
                 return                                            # exit status 0, like MG5
             print(f"fake mg5: imported {target}")
         elif line.startswith("output "):
+            if os.environ.get("FAKE_MG5_NO_PROCESS"):
+                print(f'Command "{line}" interrupted with error:')
+                print("InvalidCmd : no diagrams")
+                return
             name = line.split()[1]
             d = Path(name)
             (d / "Cards").mkdir(parents=True)
@@ -80,10 +84,25 @@ def mg5(argv: list[str]) -> None:
             (d / "Cards" / "run_card.dat").write_text(RUN_CARD % {"nevents": 10000})
             (d / "Cards" / "param_card.dat").write_text(PARAM_CARD)
             (d / "Source" / "make_opts").write_text("" if lhapdf_off else "lhapdf=/x/bin/lhapdf-config\n")
+            # like the real thing: a file that embeds the build location, and a symlink that is relative to
+            # that location and leaves the process directory (lib/libLHAPDF.a -> the conda environment)
+            (d / "Cards" / "amcatnlo_configuration.txt").write_text(f"process_dir = {d.resolve()}\n")
+            (d / "lib").mkdir()
+            (root / "lib").mkdir(exist_ok=True)
+            (root / "lib" / "libLHAPDF.a").write_text("x")
+            os.symlink(os.path.relpath(root / "lib" / "libLHAPDF.a", (d / "lib").resolve()),
+                       d / "lib" / "libLHAPDF.a")
             print("run_card missed argument foo. Takes default: bar")     # noise the console hides
         elif line.startswith("launch "):
             name = line.split()[1]
             d = Path(name)
+            conf = d / "Cards" / "amcatnlo_configuration.txt"
+            if conf.is_file() and conf.read_text().strip() != f"process_dir = {d.resolve()}":
+                print(f"fake mg5: stale process_dir in {conf} (process directory was moved)")
+                return
+            if (d / "lib" / "libLHAPDF.a").is_symlink() and not (d / "lib" / "libLHAPDF.a").exists():
+                print("fake mg5: lib/libLHAPDF.a is a dangling link (process directory was moved)")
+                return
             n = _n_events_from_card(d / "Cards")
             switches = [x for x in lines[i + 1:i + 5] if "=" in x and not x.startswith("set")]
             shower = next((x.split("=")[1] for x in switches if x.startswith("shower=")), None)

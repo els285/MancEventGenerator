@@ -152,6 +152,14 @@ class ExecutionCfg(_Section):
         "\"all\" (the whole run directory as one archive). Default: [\"delphes\"], or [\"lhe\"] without a "
         "detector. The manifest and logs always come back.")
     campaign_dir: Path = Field(Path("campaigns"), description="Parent directory for campaign directories")
+    build_once: bool = Field(
+        True, description="Build the MG5 process (model import, diagrams, `output`) once per campaign, in a "
+        "single job, and let every replica start from it. False: every replica builds its own.")
+    process_transfer: bool = Field(
+        True, description="How replicas get the prebuilt process: True = HTCondor transfers the archive to "
+        "each job (works anywhere, costs submit-host bandwidth); False = jobs read it by path from the "
+        "campaign directory (needs the campaign directory on a filesystem the nodes can see; use this for "
+        "thousands of jobs)")
     htcondor: HTCondorCfg = Field(default_factory=HTCondorCfg)
 
     @field_validator("memory", "disk")

@@ -1,6 +1,7 @@
 """Create a campaign, submit it, and later report on it, resubmit what failed, or cancel it."""
 from __future__ import annotations
 
+import json
 import os
 import shutil
 import subprocess
@@ -72,6 +73,8 @@ def submit(cfg: Config, *, dry_run: bool = False) -> Campaign:
     batch = ex.executor != "local"
     cdir.mkdir(parents=True)
     (cdir / "replicas").mkdir()
+    if frozen.execution.build_once:
+        (cdir / "prepare").mkdir()
     for s in seeds:
         (cdir / "replicas" / tag(s)).mkdir()
     (cdir / "config.json").write_text(frozen.model_dump_json(indent=2) + "\n")
@@ -79,7 +82,8 @@ def submit(cfg: Config, *, dry_run: bool = False) -> Campaign:
     c = Campaign(cdir, {
         "id": cid, "name": cfg.run.name, "created": datetime.now(UTC).isoformat(timespec="seconds"),
         "meg_version": __version__, "executor": ex.executor, "seeds": seeds, "retrieve": frozen.execution.retrieve,
-        "offline": batch, "lockfile_sha256": lockfile_hash(dict(os.environ)), "submissions": [],
+        "offline": batch, "build_once": frozen.execution.build_once,
+        "lockfile_sha256": lockfile_hash(dict(os.environ)), "submissions": [],
     })
     c.save()
     if batch:
@@ -89,43 +93,82 @@ def submit(cfg: Config, *, dry_run: bool = False) -> Campaign:
              frozen.execution.retrieve)
     log.info("campaign directory: %s", cdir)
     if dry_run:
-        hint = f" (submit with: cd {cdir} && condor_submit submit.sub)" if batch else ""
+        what = "condor_submit_dag campaign.dag" if frozen.execution.build_once else "condor_submit submit.sub"
+        hint = f" (submit with: cd {cdir} && {what})" if batch else ""
         log.info("dry run: files written, nothing submitted%s", hint)
         return c
+    now = datetime.now(UTC).isoformat(timespec="seconds")
     if ex.executor == "htcondor":
-        cluster = htcondor.submit(c)
-        c.meta["submissions"].append({"cluster": cluster, "seeds": seeds,
-                                      "utc": datetime.now(UTC).isoformat(timespec="seconds")})
+        if frozen.execution.build_once:
+            dag = htcondor.submit_dag(c)
+            c.meta["submissions"].append({"cluster": None, "dag_cluster": dag, "seeds": seeds, "utc": now})
+            log.info("submitted a DAG (cluster %d): the process is built once, then %d replica jobs run. "
+                     "Follow with: meg status %s", dag, len(seeds), cdir)
+        else:
+            cluster = htcondor.submit(c)
+            c.meta["submissions"].append({"cluster": cluster, "seeds": seeds, "utc": now})
+            log.info("submitted %d jobs to HTCondor cluster %d. Follow with: meg status %s",
+                     len(seeds), cluster, cdir)
         c.save()
-        log.info("submitted %d jobs to HTCondor cluster %d. Follow with: meg status %s", len(seeds), cluster, cdir)
     else:
-        c.meta["submissions"].append({"cluster": None, "seeds": seeds,
-                                      "utc": datetime.now(UTC).isoformat(timespec="seconds")})
+        c.meta["submissions"].append({"cluster": None, "seeds": seeds, "utc": now})
         c.save()
-        local.run_all(c, seeds, ex.max_running or 1)
+        prebuilt = _prepare_locally(c) if frozen.execution.build_once else None
+        local.run_all(c, seeds, ex.max_running or 1, prebuilt)
     return c
+
+
+def prepare_archive(c: Campaign) -> Path:
+    return c.dir / "prepare" / "outbox" / "process.tar.gz"
+
+
+def _prepare_locally(c: Campaign) -> Path:
+    rc = local.run_prepare(c)
+    st = prepare_status(c)
+    if rc != 0 or not st or st[0] != "ok":
+        raise MegError(f"building the MG5 process failed ({st[1] if st else 'no status'}). "
+                       f"See {c.dir / 'prepare' / 'job.out'} and the logs in {c.dir / 'prepare' / 'outbox'}")
+    return prepare_archive(c)
+
+
+def prepare_status(c: Campaign) -> tuple[str, str] | None:
+    """('ok' | 'failed', error) once the build-once job has finished; None before that."""
+    p = c.dir / "prepare" / "outbox" / "status.json"
+    if not p.is_file():
+        return None
+    try:
+        st = json.loads(p.read_text())
+    except json.JSONDecodeError:
+        return None
+    return st["state"], st.get("error", "")
 
 
 # --------------------------------------------------------------------------- status
 
 def seed_states(c: Campaign) -> tuple[dict[int, tuple[str, str]], bool]:
     """seed -> (state, detail). States: ok, failed, idle, running, held, transferring, suspended, removed,
-    lost (left the queue without leaving results), not submitted. The bool says whether the queue was asked."""
-    queue = htcondor.queue_states(c) if c.meta["executor"] == "htcondor" else {}
-    asked = queue is not None
-    queue = queue or {}
+    waiting (the process is still being built), blocked (it could not be built), lost (left the queue
+    without leaving results), not submitted. The bool says whether the queue was asked."""
+    info = htcondor.queue_states(c) if c.meta["executor"] == "htcondor" else htcondor.QueueInfo()
+    asked = info is not None
+    info = info or htcondor.QueueInfo()
     submitted = {s for sub in c.meta["submissions"] for s in sub["seeds"]}
+    prep = prepare_status(c) if c.meta.get("build_once") else ("ok", "")
     out: dict[int, tuple[str, str]] = {}
     for s in c.seeds:
         st = c.read_status(s)
         if st:
             out[s] = (st["state"], st.get("error", ""))
-        elif s in queue:
-            out[s] = queue[s]
+        elif s in info.seeds:
+            out[s] = info.seeds[s]
         elif s not in submitted:
             out[s] = ("not submitted", "")
         elif c.meta["executor"] == "htcondor" and not asked:
             out[s] = ("unknown", "condor_q not available here")
+        elif prep is not None and prep[0] == "failed":
+            out[s] = ("blocked", f"the MG5 process could not be built: {prep[1][:100]}")
+        elif (prep is None or info.dag_alive) and (info.prepare is not None or info.dag_alive):
+            out[s] = ("waiting", "the process is being built, or the replica jobs are not queued yet")
         else:
             out[s] = ("lost", "no results and not in the queue")
     return out, asked
@@ -137,8 +180,14 @@ def status_text(c: Campaign) -> tuple[str, dict[str, list[int]]]:
     for s, (st, _) in states.items():
         by.setdefault(st, []).append(s)
     lines = [f"campaign {c.id}  ({len(c.seeds)} replicas, executor {c.meta['executor']})"]
-    for st in ("ok", "running", "transferring", "idle", "held", "suspended", "failed", "lost", "removed",
-               "not submitted", "unknown"):
+    if c.meta.get("build_once"):
+        prep = prepare_status(c)
+        if prep:
+            lines.append("  process build: " + ("ok" if prep[0] == "ok" else f"FAILED: {prep[1][:100]}"))
+        else:
+            lines.append("  process build: not finished yet")
+    for st in ("ok", "running", "transferring", "idle", "waiting", "held", "suspended", "failed", "blocked", "lost",
+               "removed", "not submitted", "unknown"):
         if st in by:
             lines.append(f"  {st:<13}{len(by[st]):>6}")
     for st in ("failed", "held", "lost"):
@@ -152,38 +201,50 @@ def status_text(c: Campaign) -> tuple[str, dict[str, list[int]]]:
         lines.append(f"  finished replicas hold {total} events in total")
     if len(ok) == len(c.seeds):
         lines.append(f"all done: run `meg collect {c.dir}`")
-    elif by.get("failed") or by.get("lost"):
+    elif by.get("failed") or by.get("lost") or by.get("blocked"):
         lines.append(f"to rerun the failed/lost ones: meg resubmit {c.dir}")
     return "\n".join(lines), by
 
 
 def resubmit(c: Campaign, *, dry_run: bool = False) -> list[int]:
     states, _ = seed_states(c)
-    todo = sorted(s for s, (st, _) in states.items() if st in ("failed", "lost"))
+    todo = sorted(s for s, (st, _) in states.items() if st in ("failed", "lost", "blocked"))
     if not todo:
         log.info("nothing to resubmit (no failed or lost replicas)")
         return []
     for s in todo:                               # drop the stale outbox: a status.json must mean *this* attempt
         shutil.rmtree(c.outbox(s), ignore_errors=True)
     n = len(c.meta["submissions"]) + 1
+    now = datetime.now(UTC).isoformat(timespec="seconds")
+    rebuild = bool(c.meta.get("build_once")) and (prepare_status(c) or ("none", ""))[0] != "ok"
+    if rebuild:
+        shutil.rmtree(c.dir / "prepare" / "outbox", ignore_errors=True)
     if c.meta["executor"] == "htcondor":
         (c.dir / f"seeds_{n}.txt").write_text("".join(f"{s},{tag(s)}\n" for s in todo))
         (c.dir / f"submit_{n}.sub").write_text(htcondor.render_submit(c, f"seeds_{n}.txt"))
+        if rebuild:
+            (c.dir / f"campaign_{n}.dag").write_text(htcondor.render_dag(f"submit_{n}.sub"))
         if dry_run:
-            log.info("dry run: wrote submit_%d.sub for %d replicas", n, len(todo))
+            log.info("dry run: wrote the submit files for %d replicas", len(todo))
             return todo
-        cluster = htcondor.submit(c, f"submit_{n}.sub")
-        c.meta["submissions"].append({"cluster": cluster, "seeds": todo,
-                                      "utc": datetime.now(UTC).isoformat(timespec="seconds")})
+        if rebuild:
+            dag = htcondor.submit_dag(c, f"campaign_{n}.dag")
+            c.meta["submissions"].append({"cluster": None, "dag_cluster": dag, "seeds": todo, "utc": now})
+            log.info("resubmitted as DAG cluster %d (the process is rebuilt first, then %d replicas)", dag, len(todo))
+        else:
+            cluster = htcondor.submit(c, f"submit_{n}.sub")
+            c.meta["submissions"].append({"cluster": cluster, "seeds": todo, "utc": now})
+            log.info("resubmitted %d replicas as HTCondor cluster %d", len(todo), cluster)
         c.save()
-        log.info("resubmitted %d replicas as HTCondor cluster %d", len(todo), cluster)
     else:
         if dry_run:
             return todo
-        c.meta["submissions"].append({"cluster": None, "seeds": todo,
-                                      "utc": datetime.now(UTC).isoformat(timespec="seconds")})
+        c.meta["submissions"].append({"cluster": None, "seeds": todo, "utc": now})
         c.save()
-        local.run_all(c, todo, c.config().execution.max_running or 1)
+        prebuilt = None
+        if c.meta.get("build_once"):
+            prebuilt = _prepare_locally(c) if rebuild else prepare_archive(c)
+        local.run_all(c, todo, c.config().execution.max_running or 1, prebuilt)
     return todo
 
 
