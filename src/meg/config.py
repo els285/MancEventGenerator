@@ -152,6 +152,11 @@ class ExecutionCfg(_Section):
         "\"all\" (the whole run directory as one archive). Default: [\"delphes\"], or [\"lhe\"] without a "
         "detector. The manifest and logs always come back.")
     campaign_dir: Path = Field(Path("campaigns"), description="Parent directory for campaign directories")
+    output_dir: Path | None = Field(
+        None, description="Absolute path (e.g. on EOS, visible from the worker nodes) that the jobs write their "
+        "results to, into <output_dir>/<campaign id>/. Only the small status files then travel back to the "
+        "campaign directory, which can stay on a small disk. Default: results come back into the campaign "
+        "directory.")
     htcondor: HTCondorCfg = Field(default_factory=HTCondorCfg)
 
     @field_validator("memory", "disk")
@@ -160,6 +165,14 @@ class ExecutionCfg(_Section):
         if not _SIZE.fullmatch(v.strip()):
             raise ValueError("write a size like 4GB, 500MB or 2048")
         return v.strip()
+
+    @field_validator("output_dir")
+    @classmethod
+    def _output_dir(cls, v: Path | None) -> Path | None:
+        if v is not None and not v.is_absolute():
+            raise ValueError("write output_dir as an absolute path, e.g. /eos/user/e/ethan/meg "
+                             "(a job on a worker node cannot resolve a relative one)")
+        return v
 
     @field_validator("walltime")
     @classmethod

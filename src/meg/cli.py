@@ -183,7 +183,9 @@ def _cmd_collect(a: argparse.Namespace) -> int:
     from .batch import collect as col
     s = col.collect(_campaign(a), verify=a.verify)
     print(col.summary_text(s))
-    print(f"files are in {_campaign(a).outputs}")
+    c = _campaign(a)
+    where = f"results are in {s['output_dir']}; " if s.get("output_dir") else ""
+    print(f"{where}files are in {c.outputs}" if not where else f"{where}status files are in {c.outputs}")
     return 0 if not s["failed"] else 1
 
 

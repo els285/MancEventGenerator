@@ -31,3 +31,4 @@ disk = "30GB"
 walltime = "12:00:00"
 max_running = 500          # at most 500 jobs in the queue/running at once
 retrieve = ["delphes"]     # or ["delphes", "lhe", "hepmc"], or "all" (whole run directory, one archive)
+# output_dir = "/eos/user/e/ethan/meg"   # jobs write results here (absolute path); only status files come back
