@@ -71,6 +71,12 @@ def submit(cfg: Config, *, dry_run: bool = False) -> Campaign:
         runner.prepare(frozen)
     seeds = cfg.seeds()
     batch = ex.executor != "local"
+    if ex.output_dir and not dry_run:
+        try:
+            (ex.output_dir / cid).mkdir(parents=True, exist_ok=True)
+        except OSError as e:
+            log.warning("cannot create %s from here (%s); the jobs will try to create it on the nodes",
+                        ex.output_dir / cid, e)
     cdir.mkdir(parents=True)
     (cdir / "replicas").mkdir()
     if frozen.execution.build_once:
@@ -83,6 +89,7 @@ def submit(cfg: Config, *, dry_run: bool = False) -> Campaign:
         "id": cid, "name": cfg.run.name, "created": datetime.now(UTC).isoformat(timespec="seconds"),
         "meg_version": __version__, "executor": ex.executor, "seeds": seeds, "retrieve": frozen.execution.retrieve,
         "offline": batch, "build_once": frozen.execution.build_once,
+        "output_dir": str(ex.output_dir / cid) if ex.output_dir else None,
         "lockfile_sha256": lockfile_hash(dict(os.environ)), "submissions": [],
     })
     c.save()
@@ -92,6 +99,8 @@ def submit(cfg: Config, *, dry_run: bool = False) -> Campaign:
     log.info("campaign %s: %d replicas, seeds %d..%d, retrieving %s", cid, len(seeds), seeds[0], seeds[-1],
              frozen.execution.retrieve)
     log.info("campaign directory: %s", cdir)
+    if ex.output_dir:
+        log.info("results go to %s (only status files come back to the campaign directory)", ex.output_dir / cid)
     if dry_run:
         what = "condor_submit_dag campaign.dag" if frozen.execution.build_once else "condor_submit submit.sub"
         hint = f" (submit with: cd {cdir} && {what})" if batch else ""

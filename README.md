@@ -106,6 +106,15 @@ directory has thousands of files, hence one archive). Each replica always also r
 `meg collect` prints the combined cross-section (inverse-variance weighted over replicas) with a
 chi2/ndf consistency check.
 
+**Results on another disk (e.g. EOS).** If the campaign directory sits on a small disk (AFS, say), add
+`output_dir = "/eos/user/e/ethan/meg"` under `[execution]` (an absolute path the *nodes* can write to).
+Each job then copies its files to `<output_dir>/<campaign id>/` itself and only a small `status.json`
+comes back through HTCondor. `meg collect` checks the files there (size, and checksum with `--verify`)
+and does not copy them. A failed copy makes that replica fail (its logs stay in the campaign directory),
+so `meg resubmit` redoes it. The nodes need credentials for that filesystem; at sites that need them, add
+the right line to `execution.htcondor.extra` (for example `MY.SendCredential = True` for Kerberos at
+CERN, check your site's documentation). Without `output_dir`, nothing changes.
+
 **How a job runs.** `meg submit` first does every one-time, possibly networked step on the submit host
 (MG5 configuration, Pythia8 interface, Ninja, UFO models, PDF sets), then the jobs run with
 `MEG_OFFLINE=1`, so nodes need no internet and jobs cannot race each other to install things. Each job

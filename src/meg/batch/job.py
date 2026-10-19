@@ -95,6 +95,34 @@ def _write_outputs(cfg: Config, result: runner.RunResult, outbox: Path, cid: str
                 _gzip(src, outbox / unique_name(cid, seed, "hepmc"))
 
 
+def _ship(outbox: Path, dest: Path) -> dict[str, dict]:
+    """Move every file of the outbox (status.json aside) to `dest`, which a worker node can write to but the
+    submit side may not have room for. Each file is copied under a temporary name, size-checked, renamed, and
+    only then removed from the outbox. Returns the files' records, marked remote."""
+    dest.mkdir(parents=True, exist_ok=True)
+    moved: dict[str, dict] = {}
+    for f in sorted(outbox.iterdir()):
+        if not f.is_file() or f.name.startswith("status.json"):
+            continue
+        size, digest = f.stat().st_size, sha256_file(f)
+        part = dest / (f.name + ".part")
+        shutil.copyfile(f, part)
+        if part.stat().st_size != size:
+            part.unlink(missing_ok=True)
+            raise MegError(f"copy of {f.name} to {dest} came out {part.stat().st_size} bytes, not {size}")
+        part.replace(dest / f.name)
+        f.unlink()
+        moved[f.name] = {"bytes": size, "sha256": digest, "remote": True}
+    return moved
+
+
+def _drop_payload(outbox: Path) -> None:
+    """After a failed copy to the remote directory: keep only the small provenance files locally."""
+    for f in outbox.iterdir():
+        if f.is_file() and f.name != "status.json" and not f.name.endswith((".logs.tar.gz", ".manifest.json")):
+            f.unlink()
+
+
 def run_replica(meta_path: Path, config_path: Path, seed: int, outbox: Path,
                 prebuilt: Path | None = None) -> int:
     """Run replica `seed`, starting from the prebuilt process archive if given. Returns the exit status."""
@@ -104,6 +132,8 @@ def run_replica(meta_path: Path, config_path: Path, seed: int, outbox: Path,
     if meta.get("offline"):
         os.environ["MEG_OFFLINE"] = "1"
     outbox = Path(outbox)
+    out_root = (base.get("execution") or {}).get("output_dir")
+    remote = Path(out_root) / cid if out_root else None
     if outbox.exists():
         shutil.rmtree(outbox)             # nothing from an earlier attempt may look like this attempt's result
     outbox.mkdir(parents=True)
@@ -137,8 +167,20 @@ def run_replica(meta_path: Path, config_path: Path, seed: int, outbox: Path,
             status.setdefault("error", "interrupted or killed before the run finished")
         status["seconds"] = round(time.time() - t0, 1)
         status["finished"] = datetime.now(UTC).isoformat(timespec="seconds")
-        status["files"] = {f.name: {"bytes": f.stat().st_size, "sha256": sha256_file(f)}
-                           for f in sorted(outbox.iterdir()) if f.is_file()}
+        shipped: dict[str, dict] = {}
+        if remote is not None and status["state"] == "ok":
+            try:
+                shipped = _ship(outbox, remote)
+                status["remote_dir"] = str(remote)
+            except Exception as e:             # noqa: BLE001 - a failed copy makes the replica a failed one
+                status.update(state="failed", error=f"copying the results to {remote}: {type(e).__name__}: {e}")
+                _drop_payload(outbox)
+                for part in remote.glob("*.part"):
+                    if part.name.startswith(f"{name}."):
+                        part.unlink(missing_ok=True)
+        local_files = {f.name: {"bytes": f.stat().st_size, "sha256": sha256_file(f)}
+                       for f in sorted(outbox.iterdir()) if f.is_file() and not f.name.startswith("status.json")}
+        status["files"] = {**shipped, **local_files}
         tmp = outbox / "status.json.tmp"
         tmp.write_text(json.dumps(status, indent=2) + "\n")
         tmp.replace(outbox / "status.json")    # appears only when complete: its presence means "finished"

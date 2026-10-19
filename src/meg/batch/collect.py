@@ -54,6 +54,14 @@ def collect(c: Campaign, *, verify: bool = False) -> dict:
             points.append((st.get("xsec_pb"), st.get("xsec_err_pb")))
         # every finished replica brings its files home, failures included (their logs say why)
         for name, info in st.get("files", {}).items():
+            if info.get("remote"):
+                # lives where the job put it (e.g. EOS); checked here, never copied onto the campaign disk
+                rsrc = Path(st["remote_dir"]) / name
+                if not rsrc.is_file():
+                    raise MegError(f"{rsrc} is listed in the replica's status but missing")
+                if rsrc.stat().st_size != info["bytes"] or (verify and sha256_file(rsrc) != info["sha256"]):
+                    raise MegError(f"{rsrc} does not match the checksum recorded by the job")
+                continue
             src = c.outbox(s) / name
             if not src.is_file():
                 raise MegError(f"{src} is listed in the replica's status but missing")
@@ -63,6 +71,8 @@ def collect(c: Campaign, *, verify: bool = False) -> dict:
         _link(c.outbox(s) / "status.json", c.outputs / f"{c.id}_{tag(s)}.status.json")
     summary = {"campaign": c.id, "replicas": len(c.seeds), "ok": len(ok), "failed": bad, "missing": missing,
                "events": events, **combine([(x, e) for x, e in points])}
+    if c.meta.get("output_dir"):
+        summary["output_dir"] = c.meta["output_dir"]
     (c.outputs / f"{c.id}.summary.json").write_text(json.dumps(summary, indent=2) + "\n")
     log.info("collected %d replicas into %s", len(ok) + len(bad), c.outputs)
     return summary
@@ -75,6 +85,8 @@ def summary_text(s: dict) -> str:
         lines.append(f"combined cross-section: {s['xsec_pb']:.6g}{err} pb")
         if s.get("chi2_ndf") is not None:
             lines.append(f"replica consistency chi2/ndf = {s['chi2_ndf']:.2f} (about 1 is healthy)")
+    if s.get("output_dir"):
+        lines.append(f"results are in {s['output_dir']}")
     if s["failed"]:
         more = " ..." if len(s["failed"]) > 20 else ""
         lines.append("failed: " + ", ".join(tag(x) for x in s["failed"][:20]) + more)

@@ -188,6 +188,43 @@ def test_local_campaign_reports_and_resubmits_failures(local_env, monkeypatch):
     assert sub.resubmit(c) == []                                  # nothing left to do
 
 
+def test_output_dir_keeps_results_off_the_campaign_disk(local_env, tmp_path):
+    eos = tmp_path / "eos"
+    cfg = bcfg("execution.replicas=2", "execution.seed_start=5", f'execution.output_dir="{eos}"')
+    c = sub.submit(cfg)
+    cid = c.id
+    assert c.meta["output_dir"] == str(eos / cid)
+    assert (eos / cid / f"{cid}_s0005.delphes.root").is_file()
+    assert (eos / cid / f"{cid}_s0006.logs.tar.gz").is_file()
+    back = sorted(p.name for p in c.outbox(5).iterdir())
+    assert back == ["status.json"]                                # nothing big came back
+    assert not list((eos / cid).glob("*.part"))
+    s = col.collect(c, verify=True)
+    assert s["ok"] == 2 and s["output_dir"] == str(eos / cid) and "results are in" in col.summary_text(s)
+    assert not list(c.outputs.glob("*.delphes.root"))             # not copied onto the campaign disk
+    (eos / cid / f"{cid}_s0005.delphes.root").write_text("tampered")
+    with pytest.raises(MegError, match="does not match"):
+        col.collect(c)
+    (eos / cid / f"{cid}_s0005.delphes.root").unlink()
+    with pytest.raises(MegError, match="missing"):
+        col.collect(c)
+
+
+def test_output_dir_unwritable_fails_the_replica_and_keeps_logs(local_env, tmp_path):
+    blocker = tmp_path / "file"
+    blocker.write_text("x")                                       # a file where a directory is needed
+    c = sub.submit(bcfg("execution.replicas=1", f'execution.output_dir="{blocker}/sub"'))
+    st = c.read_status(1)
+    assert st["state"] == "failed" and "copying the results" in st["error"]
+    left = sorted(p.name for p in c.outbox(1).iterdir())
+    assert left == [f"{c.id}_s0001.logs.tar.gz", f"{c.id}_s0001.manifest.json", "status.json"]
+
+
+def test_output_dir_must_be_absolute():
+    with pytest.raises(MegError, match="absolute"):
+        bcfg('execution.output_dir="relative/eos"')
+
+
 def test_collect_detects_damage(local_env):
     c = sub.submit(bcfg("execution.replicas=1"))
     f = next((c.replica_dir(1) / "outbox").glob("*.delphes.root"))
@@ -525,3 +562,11 @@ def test_generated_job_script_uses_the_prebuilt_process(toolchain, fake_condor, 
     r = subprocess.run(["bash", "job.sh", "2", str(n1 / "outbox" / "process.tar.gz")], cwd=n3,
                        env=env | {"TMPDIR": str(n3)}, capture_output=True, text=True)
     assert r.returncode == 0, r.stderr[-2000:] + r.stdout[-1500:]
+
+
+def test_output_dir_with_a_prebuilt_process(local_env, tmp_path):
+    eos = tmp_path / "eos"
+    c = sub.submit(bcfg("execution.replicas=2", f'execution.output_dir="{eos}"', build_once=True))
+    assert (eos / c.id / f"{c.id}_s0001.delphes.root").is_file()
+    assert [p.name for p in c.outbox(2).iterdir()] == ["status.json"]
+    assert col.collect(c, verify=True)["ok"] == 2
