@@ -1,0 +1,33 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "meg"
+version = "0.1.0"
+description = "MEG: a MadGraph Event Generator pipeline (MadGraph5_aMC@NLO + Pythia8/Herwig7 + Delphes) driven by one TOML file"
+readme = "README.md"
+requires-python = ">=3.11"
+dependencies = ["pydantic>=2"]
+
+[project.optional-dependencies]
+root = ["uproot", "numpy"]      # read the Delphes output for the run manifest
+dev = ["pytest", "ruff", "uproot", "numpy"]
+
+[project.scripts]
+meg = "meg.cli:main"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/meg"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+markers = ["integration: needs the real conda toolchain (slow); run with -m integration"]
+addopts = "-m 'not integration'"
+
+[tool.ruff]
+line-length = 120
+src = ["src", "tests"]
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "B", "UP"]

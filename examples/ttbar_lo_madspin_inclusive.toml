@@ -1,0 +1,11 @@
+# Inclusive top decays: every W decay mode (taus included), spin correlations kept.
+[run]
+name = "ttbar_inclusive_decays"
+
+[generation]
+events = 1000
+
+[madspin]
+enable = true
+decays = ["t > w+ b, w+ > all all", "t~ > w- b~, w- > all all"]
+# options = { BW_cut = 15, spinmode = "onshell" }     # MadSpin 'set' lines, if you need them

@@ -1,0 +1,15 @@
+# Run-card edits are strict: a key MG5's run_card does not have is an error, not a silent no-op.
+# Booleans become .true./.false.; strings are written verbatim, so quote them as MG5 expects.
+[run]
+name = "ttbar_lo_cuts"
+
+[generation]
+events = 500
+pdf = "NNPDF30_nlo_as_0118"     # an LHAPDF set instead of MG5's built-in PDF (fetched on first use)
+
+[generation.run_card]
+ptj = 30.0
+etaj = 4.5
+
+[shower]
+kind = "none"                   # parton level: Delphes reads the LHE file directly

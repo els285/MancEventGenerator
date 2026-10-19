@@ -1,0 +1,11 @@
+.pixi/
+cache/
+results/
+*.root
+*.hepmc
+*.lhe
+__pycache__/
+work/
+PROC_*/
+test1/
+py.py

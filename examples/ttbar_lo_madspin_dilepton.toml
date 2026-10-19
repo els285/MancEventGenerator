@@ -1,0 +1,17 @@
+# Dileptonic ttbar: both tops decay to e/mu + neutrino + b via MadSpin, then Pythia8 and Delphes.
+# You write the MadSpin syntax yourself; MEG puts it in madspin_card.dat in this order:
+# set options, define lines, decay lines, launch. The cross-section in the manifest includes
+# the branching ratio of the decays you choose.
+[run]
+name = "ttbar_dilepton"
+
+[generation]
+events = 1000
+
+[madspin]
+enable = true
+define = ["l+ = e+ mu+", "l- = e- mu-", "vl = ve vm", "vl~ = ve~ vm~"]
+decays = ["t > w+ b, w+ > l+ vl", "t~ > w- b~, w- > l- vl~"]
+
+[shower]
+kind = "pythia8"

@@ -1,0 +1,15 @@
+# Keep the event files, not just the Delphes ROOT file.
+# They end up in results/<name>/output/ as <name>.lhe.gz and <name>.hepmc.gz.
+[run]
+name = "ttbar_keep_events"
+
+[generation]
+events = 1000
+
+[shower]
+kind = "pythia8"
+
+[output]
+lhe = true
+hepmc = true
+compress = true                # false: uncompressed hard links (no extra disk, files are big)

@@ -1,0 +1,14 @@
+# NLO (MC@NLO) ttbar showered by Herwig 7. MG5 does not shower; the events carry Herwig's
+# counterterms (parton_shower = HERWIGPP is set for you).
+[run]
+name = "ttbar_nlo_hw7"
+
+[process]
+order = "NLO"                  # "[QCD]" is appended to the process for you
+
+[generation]
+events = 200
+nlo_accuracy = 0.05            # loose, for a quick test; the MG5 default is 0.01
+
+[shower]
+kind = "herwig7"

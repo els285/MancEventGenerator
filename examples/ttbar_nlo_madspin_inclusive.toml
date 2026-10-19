@@ -1,0 +1,18 @@
+# Inclusive top decays: every W decay mode (taus included), spin correlations kept.
+[run]
+name = "tt2L_nlo"
+
+[process]
+definition = "p p > t t~"
+order = "NLO"
+
+[generation]
+events = 1000
+
+[shower]
+kind = "pythia8"
+
+[madspin]
+enable = true
+decays = ["t > w+ b, w+ > l+ vl", "t~ > w- b~, w- > l- vl~"]
+# options = { BW_cut = 15, spinmode = "onshell" }     # MadSpin 'set' lines, if you need them

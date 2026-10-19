@@ -1,0 +1,25 @@
+# A UFO model: SMEFTsim 3.0.2, pinned to a commit in MEG's registry (src/meg/data/models.toml).
+# It is fetched on first use into the MEG cache and its content hash is recorded in ./models.lock
+# (commit that file). SMEFTsim is a tree-level model, so only LO runs work with it.
+#
+# UFO models are Python code that MG5 executes: only use sources you trust.
+[run]
+name = "smeft_ttbar_cG"
+
+[model]
+name = "SMEFTsim_U35_alphaScheme_UFO"
+restriction = "massless"
+
+[model.params]                 # param_card edits, by the name after '#' in the card
+cG = 0.5                       # chromomagnetic gluon operator; the card default is 0.2
+# "SMEFT:6" = 0.1              # or by BLOCK:id, if a name is ambiguous
+
+[process]
+# NP==1: terms linear in the new-physics coupling order. Check the model's coupling_orders.py.
+definition = "p p > t t~ NP==1"
+
+[generation]
+events = 1000
+
+[shower]
+kind = "pythia8"

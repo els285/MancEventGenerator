@@ -1,0 +1,11 @@
+# The baseline: p p > t t~ at LO, showered by Pythia8 inside MG5, then Delphes (ATLAS card).
+# Run:  pixi run meg generate examples/ttbar_lo_pythia8.toml
+[run]
+name = "ttbar_lo_py82"
+seed = 1
+
+[generation]
+events = 1000
+
+[shower]
+kind = "pythia8"

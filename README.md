@@ -1,114 +1,232 @@
-# madlad-conda-spike
+# MEG — MadGraph Event Generator
 
-A small experiment to answer one question before designing the new pipeline:
+One TOML file in, a Delphes ROOT file and a provenance manifest out.
 
-> Can a locked conda-forge environment replace the source-built Singularity image, and can
-> MG5 run NLO + Pythia8 + Delphes inside it?
+MEG drives **MadGraph5_aMC@NLO** (LO and NLO), **Pythia8** or **Herwig7** showering, and **Delphes**
+from a locked conda-forge toolchain, on **macOS (Apple Silicon)** and **Linux**. It is the packaged
+successor of the `madlad-conda-spike` prototype.
 
-It builds the toolchain MadLAD's image builds (MG5, Pythia8, LHAPDF, FastJet, Delphes), then runs
-the same two detector-simulation paths MadLAD uses.
+```toml
+# ttbar.toml
+[run]
+name = "ttbar_nlo"
 
-| Stage | Process | Exercises | Delphes mode |
+[process]
+order = "NLO"            # p p > t t~ [QCD]
+
+[shower]
+kind = "herwig7"         # "pythia8" | "herwig7" | "none"
+```
+```
+pixi run meg generate ttbar.toml
+```
+
+## Install
+
+MEG needs [pixi](https://pixi.sh). It installs every tool from conda-forge and locks them
+(`pixi.lock`, for `linux-64` and `osx-arm64`), so everyone gets the same MG5, Pythia8, Herwig7 and
+Delphes builds.
+
+```
+git clone <this repo> && cd MEG
+pixi install
+pixi run meg doctor        # checks every tool, prints versions
+pixi run meg setup         # one-time: configures MG5, installs its Pythia8 interface and (for NLO) the Ninja loop library (needs network; Ninja compiles from source, once)
+```
+
+Then use `pixi run meg ...`, or `pixi shell` and plain `meg ...`.
+
+## Commands
+
+| command | what it does |
+|---|---|
+| `meg generate CONFIG [--set k=v ...] [-v\|-q] [--force]` | generate events (`meg run` also works). By default you see MG5's, Herwig's and Delphes' own output (minus known MG5 noise) plus one line per stage. `-v` shows all of it, `-q` hides the tools' output and keeps the stage lines. Everything is always in the log files. |
+| `meg plan CONFIG [--set k=v ...]` | show what a run would do, without running |
+| `meg init [FILE]` | write an example config |
+| `meg schema` | JSON Schema of the config (for editor completion) |
+| `meg doctor` | check the environment |
+| `meg setup` | configure MG5, install its Pythia8 interface and Ninja |
+| `meg model list` / `meg model fetch NAME` | UFO models: registry / fetch into the cache |
+| `meg pdf fetch SET...` | fetch LHAPDF sets into the cache |
+| `meg mg5 [file.mg5]` (or `pixi run mg5`) | open MG5 by hand, with the same environment fixes MEG uses; it works in `./work` (`--workdir DIR` to change) and finds command files relative to where you ran it |
+
+`--set` overrides any config key, so one file serves many runs:
+`meg generate ttbar.toml --set 'run.name="ttbar_s2"' --set run.seed=2 --set 'shower.kind="pythia8"'`.
+Values are TOML (`"text"` is quoted, numbers and booleans are not).
+
+## Configuration
+
+Every key is optional. Unknown keys are errors, so a typo cannot silently run with a default.
+`meg schema` prints the full list with descriptions; the sections are:
+
+| section | key | default | meaning |
 |---|---|---|---|
-| `lo`  | `p p > t t~`        | MG5, LHAPDF, run-card editing | `DelphesLHEF` |
-| `nlo` | `p p > t t~ [QCD]`  | MG5 NLO run-time Fortran build, Pythia8 interface, HepMC2, shower | `DelphesHepMC2` |
+| `[run]` | `name`, `seed`, `output_dir` | `meg_run`, `1`, `results` | output goes to `<output_dir>/<name>/` |
+| `[process]` | `definition` | `p p > t t~` | MG5 process (the baseline is always ttbar) |
+| | `order` | `LO` | `LO` or `NLO` (`[QCD]` is appended if you wrote no brackets) |
+| | `extra_commands` | `[]` | raw MG5 commands before `generate`, e.g. `define p = p b b~` |
+| `[model]` | `name` | `sm` (LO) / `loop_sm-no_b_mass` (NLO) | MG5 built-in, registered UFO, or name for an inline UFO |
+| | `restriction` | – | e.g. `massless` |
+| | `params` | `{}` | param_card edits by name or `BLOCK:id`; unknown names are errors |
+| | `git`+`rev` / `url`+`sha256`, `subdir` | – | a UFO not in the registry (pinned) |
+| `[generation]` | `events` | `500` | |
+| | `pdf` | `builtin` (LO) / `NNPDF30_nlo_as_0118` (NLO) | `builtin` or an LHAPDF set name |
+| | `nlo_accuracy` | `0.01` | NLO `req_acc` |
+| | `run_card` | `{}` | strict run_card edits, e.g. `ptj = 30.0` |
+| `[madspin]` | `enable` | `false` | decay particles with MadSpin |
+| | `decays` | `[]` | your MadSpin decay statements, required when enabled |
+| | `define`, `options` | `[]`, `{}` | MadSpin `define` lines; `set` options (e.g. `BW_cut`) |
+| `[shower]` | `kind` | `pythia8` | `pythia8`, `herwig7`, `none` |
+| `[detector]` | `kind`, `card` | `delphes`, `ATLAS` | packaged card name, or path to a `.tcl` |
+| `[output]` | `lhe`, `hepmc`, `compress` | `false`, `false`, `true` | keep the LHE / showered HepMC file in `<run>/output/` (gzip by default) |
+| `[execution]` | `cores` | `0` (all) | |
 
-The Delphes card is MadLAD's `ATLAS_sim_FASTJET.tcl` (MIT licence), so the Delphes FastJet module
-is exercised too.
+NLO needs a shower, and an LHAPDF set (not `builtin`); both are checked when the config is loaded.
+See `examples/` for LO, NLO, custom cuts and a SMEFTsim model.
 
-## Run it
+### What each shower choice does
 
-Needs [pixi](https://pixi.sh) and network access to conda-forge, Launchpad (MG5, py8
-interface) and `lhapdfsets.web.cern.ch` (PDF set).
+| order | shower | MG5 is told | then |
+|---|---|---|---|
+| LO | `none` | `launch -f` | Delphes reads the LHE file |
+| LO | `pythia8` | `shower=Pythia8` | Delphes reads the HepMC from MG5's interface |
+| LO | `herwig7` | `launch -f` | Herwig showers the LHE file → Delphes |
+| NLO | `pythia8` | `shower=PYTHIA8`, `parton_shower=PYTHIA8` | Delphes reads the HepMC |
+| NLO | `herwig7` | `shower=OFF`, `parton_shower=HERWIGPP` | Herwig showers the MC@NLO events → Delphes |
 
-Platforms declared in `pixi.toml`: `linux-64` and `osx-arm64` (Apple Silicon). Windows is
-supported through WSL2, which is just `linux-64`. Intel Macs (`osx-64`) and `linux-aarch64`
-are not declared yet; add them one at a time with `pixi workspace platform add <platform>`,
-because pixi solves every listed platform at once and one missing package fails the lot.
+Delphes' two HepMC readers accept different layouts; MEG picks the reader from the file header.
 
-**macOS:** install the Xcode command line tools first (`xcode-select --install`). The conda
-compilers still link against the Apple SDK. The scripts use GNU coreutils and bash 5 from the
-conda environment, so they behave the same as on Linux. For serious production runs use Linux
-or your cluster; the Mac route is for development and testing.
+### Decays (MadSpin)
 
-```bash
-# Path A (fallback, most likely to work): conda-forge toolchain + pinned MG5 tarball
-pixi run fetch-mg5          # MG5 into ./cache/mg5 (sha256 recorded on first use; commit it)
-pixi run check              # what got installed, Pythia8 build options, models present
-pixi run smoke-lo           # fast: minutes
-pixi run smoke-nlo          # slow: NLO grid setup, tens of minutes on a few cores
+`p p > t t~` produces undecayed tops, so the jets, leptons and MET in Delphes only look like a ttbar
+event once the tops decay. `madspin.enable = true` decays them with MadSpin (spin correlations kept).
+You write the decay syntax yourself, exactly as in a `madspin_card.dat` but without the leading word:
 
-# Path B (the experiment): conda `mg5amcnlo` package instead of the tarball
-pixi run -e conda-mg5 check
-pixi run -e conda-mg5 smoke-lo
-pixi run -e conda-mg5 smoke-nlo
+```toml
+[madspin]
+enable = true
+define = ["l+ = e+ mu+", "l- = e- mu-", "vl = ve vm", "vl~ = ve~ vm~"]
+decays = ["t > w+ b, w+ > l+ vl", "t~ > w- b~, w- > l- vl~"]
+options = { BW_cut = 15 }                 # optional MadSpin 'set' lines
+```
+MEG writes the card in this order: `set seed` (from `run.seed`), your `options`, your `define`s, your
+`decay`s, `launch`. A leading `decay `/`define ` you typed anyway is accepted. Any particle can be
+decayed, not only tops. See `examples/` for dileptonic and inclusive top decays. Things to know:
+
+* MadSpin writes the decayed events to a second run, `Events/run_01_decayed_1/`; MEG uses that one
+  and fails if it is missing, so a silently skipped MadSpin cannot pass as a decayed sample.
+* The shower and Delphes run on the decayed events.
+* The LHE cross-section after MadSpin **includes the branching ratio** of the decays you chose
+  (e.g. e/mu dileptons are about 5% of the inclusive value).
+* Lepton+jets takes two runs, one per charge assignment (`t` leptonic with `t~` hadronic, then swapped):
+  MadSpin decays `t` and `t~` independently, so listing both a leptonic and a hadronic decay for the
+  same particle mixes all the final states.
+* MadSpin needs the width of each decaying particle in the `param_card`; set it with `model.params`
+  (e.g. `"DECAY:6" = 1.4`) if you change the model parameters.
+* Works at LO and NLO, with either shower or none. `decays` listed with `enable = false` do nothing, so
+  `--set madspin.enable=true` switches a config on.
+
+### UFO models (e.g. SMEFTsim)
+
+A model is an input, not part of the environment. It is fetched from a **pinned** source (a full git
+commit SHA, or an archive sha256) into an immutable cache directory keyed by its content hash, and
+that hash is recorded in `./models.lock`. If the source ever yields different bytes, MEG stops.
+SMEFTsim 3.0.2 is registered; add your own in a `./models.toml` (same format as
+`src/meg/data/models.toml`), or give `git`/`rev` or `url`/`sha256` inline in the config.
+`MEG_OFFLINE=1` forbids network access (cluster nodes). **UFO models are Python code that MG5
+executes; only use sources you trust.** SMEFTsim is tree-level, so use it with `order = "LO"`.
+
+## Stopping a run
+
+Press **Ctrl+C** (the Control key; on a Mac keyboard that is `ctrl`, not `cmd`). MEG stops MG5 and
+everything it started (compilers, `make`, worker processes): politely first, then forcibly after a few
+seconds; a second Ctrl+C kills immediately. Stages that had finished are kept, so running the same
+command again resumes. `kill <pid of meg>` does the same. Ctrl+Z only *suspends* a run (`fg` resumes
+it); don't use it to stop one.
+
+## What a run produces
+
+```
+results/<name>/
+  manifest.json          what produced the sample: resolved config, tool versions, model hash,
+                         cross-section, event counts, ROOT file hash, timings
+  config.resolved.json
+  generate/              MG5 process dir, proc.mg5 / launch.mg5 command files, logs, events.lhe[, events.hepmc]
+  shower/                (Herwig only) hw7.in, logs, the HepMC file
+  detector/delphes.root  the Delphes output (tree "Delphes")
+  output/<name>.lhe.gz   only if output.lhe = true; <name>.hepmc.gz if output.hepmc = true
+  .meg/                  stage records used for resuming
 ```
 
-`pixi run smoke` does check + MG5 setup + PDFs + both stages. Commit the generated `pixi.lock`;
-the lockfile is the thing that makes the environment reproducible.
+By default the LHE and HepMC files stay in `generate/` and `shower/` as intermediates (that is what makes
+resuming work) and are not copied anywhere. Ask for them with `output.lhe = true` / `output.hepmc = true`
+(or `--set output.hepmc=true`); you can add this to a finished run and only that step runs. Uncompressed
+copies (`compress = false`) are hard links, so they take no extra disk. HepMC files are large: expect
+gigabytes per ten thousand events.
 
-Tunables (environment variables): `SEED`, `NB_CORE`, `LO_EVENTS`, `NLO_EVENTS`, `MG5_VERSION`,
-`MG5_BIN`, `MADLAD_CACHE`.
+Re-running the same config in the same directory skips stages whose inputs are unchanged (a new
+Delphes card re-runs only Delphes; a new seed re-runs everything). `--force` starts over. MEG refuses
+to use a directory that is not one of its run directories.
 
-## What you get back
+An empty result is a failure: MG5 often exits 0 after an error and Delphes prints `** ERROR` yet
+writes an empty tree, so MEG scans the logs, and checks the ROOT file has entries. On any failure it
+writes `<stage>/diag.txt` (platform, build flags, log tails, MG5's hidden compile errors re-run);
+attach that file when asking for help.
 
-- `results/<env>/{lo,nlo}/*.log`: MG5 and Delphes logs. **Keep these if anything fails.**
-- `results/<env>/{lo,nlo}/manifest.json`: package builds, lockfile hash, MG5 version, seed,
-  event count, cross-section, Delphes entry count. A preview of the per-run manifest the new
-  pipeline would write.
+## Python API
 
-## Reading the outcome
+```python
+import meg
 
-| Result | Meaning | Next step |
-|---|---|---|
-| Both paths pass | Fully conda-based stack is viable | Build the pipeline core on `conda-mg5` |
-| Path A passes, B fails | Toolchain is fine, the `mg5amcnlo` conda package is not (missing NLO, models, or py8 interface) | Keep MG5 as a pinned tarball in the content cache |
-| `solve` fails on a package | Not available for your platform or channel | Add its channel under `[feature.condamg]`, or build a conda recipe |
-| `setup-mg5` fails at `install mg5amc_py8_interface` | Pythia8 ABI or path mismatch with conda's build | Check `pythia8-config --config` output in `pixi run check` |
-| NLO fails at "no HepMC file" | Shower did not run | See the comment in `scripts/smoke.sh`; `launch.log` shows the switches MG5 chose |
-| NLO fails during compilation | Compiler/ABI mismatch with the conda libraries | This is the main risk identified for the conda route; keep the log |
+cfg = meg.load_config("ttbar.toml", overrides=['generation.events=2000', 'shower.kind="pythia8"'])
+print(meg.build_plan(cfg).describe())
+res = meg.generate(cfg)          # meg.run is the same function
+res.cross_section_pb, res.delphes_root, res.manifest["toolchain"]
+```
+Or build a `meg.Config(...)` directly. Errors are `meg.MegError` / `meg.StageError` (the latter has `.diag`).
 
-## Layout
+## Where things live
+
+| | |
+|---|---|
+| environment (immutable) | `.pixi/`, locked by `pixi.lock` |
+| cache (content-keyed) | `$MEG_CACHE`, default `~/.cache/meg`: `models/`, `lhapdf/` |
+| MG5 configuration | written into the MG5 install in the environment by `meg setup` |
+| runs | `<output_dir>/<name>/` |
+
+PDF sets are fetched on first use. Behind a restrictive network, set `LHAPDF_MIRRORS` (space-separated
+base URLs serving `<SET>.tar.gz`) or extract a downloaded set into `$MEG_CACHE/lhapdf/`.
+
+## Platform notes (handled for you)
+
+MEG applies, to the programs it launches, the fixes the conda-forge toolchain needs: re-adds the C++
+standard library to MG5's link line, builds MG5's C++ as C++14, puts the environment's `lib` on
+`LD_LIBRARY_PATH` on Linux, patches and re-signs MG5's Pythia8 interface binary on macOS, and raises
+the open-file limit. `meg doctor` shows them. NLO runs compile process-specific code, which takes minutes.
+
+## Development
 
 ```
-pixi.toml                    toolchain, two environments, tasks
-scripts/common.sh            cache dirs, MG5 discovery
-scripts/fetch_mg5_tarball.sh pinned MG5 in ./cache/mg5, hash-checked
-scripts/setup_mg5.sh         point MG5 at $CONDA_PREFIX, install the py8 interface
-scripts/fetch_pdfs.sh        PDF sets into ./cache/lhapdf
-scripts/edit_card.py         strict run-card editor (unknown key = error)
-scripts/set_mg5_config.py    mg5_configuration.txt editor
-scripts/smoke.sh             the LO and NLO stages
-scripts/report.py            sanity checks + manifest.json
-scripts/check_env.py         environment inspection
-delphes/ATLAS_sim_FASTJET.tcl   from tzuhanchang/MadLAD
-.github/workflows/spike.yml  same thing in CI, weekly
+pixi run -e dev pytest                # fast: fake MG5/Delphes/Herwig that reproduce the real tools' quirks
+pixi run -e dev pytest -m integration # real tools, minutes (also a manual CI job)
+pixi run -e dev ruff check src tests
 ```
+Layout: `config.py` (schema) → `plan.py` (pure) → `runner.py` (stages) using `generate.py`, `herwig.py`,
+`delphes.py`; support in `toolchain.py`, `sysenv.py`, `models.py`, `pdf.py`, `cards.py`, `diagnostics.py`,
+`manifest.py`. A new shower or detector is a module like `herwig.py` plus a branch in `plan.py`/`runner.py`.
 
-## Status and known gaps
+## v0.1 scope and what is not here yet
 
-- **Not yet run end to end.** The `linux-64` environment solve has succeeded for both
-  environments (see `pixi.lock`: pythia8 8.312, lhapdf 6.5.6, delphes 3.5.1,
-  hepmc2 2.06.11, mg5amcnlo 3.5.7, gcc/gfortran 15.3), but the MG5/Pythia8/Delphes runs have
-  not been executed. Shell and Python syntax and the card and manifest helpers were tested
-  offline.
-- Package availability on `osx-arm64` is unconfirmed (`delphes` is known to list it). The
-  `mg5amcnlo` package solves on linux-64, but its contents (NLO, bundled models, py8
-  interface) are unverified until the smoke test runs.
-- `osx-arm64` is the least tested route: MG5 NLO compiling Fortran with conda's gfortran on
-  Apple Silicon is the most likely thing to need adjustment.
-- The `conda-mg5` environment also installs the conda package `mg5amcnlo-pythia8-interface`
-  (seen in `pixi.lock`), so the source `install mg5amc_py8_interface` step in
-  `scripts/setup_mg5.sh` may be redundant there. If `setup-mg5` is slow or fails in that
-  environment, try skipping the install and see whether the NLO stage finds the interface.
-- **FastJet.** conda-forge's `fastjet` is the Python bindings, and the `fastjet-cxx` 3.5.2
-  build ships only three runtime libraries (no headers, no `fastjet-config`), so the C++
-  FastJet that MadLAD builds from source is not available from conda-forge in a usable form.
-  This spike does not require it: MG5 should fall back to its bundled fjcore, and the Delphes
-  card in the smoke test is the real check on jet finding. If a later feature needs full
-  FastJet (FxFx merging, Delphes with external FastJet), build a small conda recipe for it.
-- The MG5 command sequence (`launch <dir> -f` taking the shower from `run_card.dat`) follows
-  MadLAD's approach but has not been exercised here; `scripts/smoke.sh` fails loudly with a hint
-  if the shower does not run.
-- Out of scope for this spike: custom models/plugins in the content cache, MadSpin, custom
-  scales, HTCondor/Slurm runners.
+* Local execution only (`execution.executor = "local"`). The plan is deliberately pure so job-array
+  executors (Slurm/HTCondor) and seed sharding can be added without changing the config.
+* No MadSpin / top decays: with `p p > t t~` the tops are undecayed, so Delphes jet multiplicities are
+  low. Decays are the next physics feature.
+* Parameter scans, and merging shards, are not implemented.
+* MG5's `systematics` weights make HepMC files large; set the relevant `run_card` key to disable them
+  once you know its name in your MG5 version.
+
+## Licence
+
+Not chosen yet. MEG drives third-party programs with their own licences (MadGraph5_aMC@NLO, Pythia8,
+Herwig7, Delphes, LHAPDF, FastJet); MEG does not redistribute them, they come from conda-forge.
+Choose a licence compatible with the tools you intend to distribute alongside it.
