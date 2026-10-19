@@ -1,0 +1,7 @@
+.pixi/
+cache/
+results/
+*.root
+*.hepmc
+*.lhe
+__pycache__/

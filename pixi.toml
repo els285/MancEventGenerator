@@ -1,0 +1,49 @@
+# Spike: can a conda-forge toolchain replace the source-built Singularity image?
+#
+# Two environments, same smoke test:
+#   default     toolchain from conda-forge; MG5 is a pinned tarball in ./cache (fallback path)
+#   conda-mg5   same toolchain + the conda `mg5amcnlo` package (the path we want to test)
+#
+# If `mg5amcnlo` is not on conda-forge for you, add the channel that has it under
+# [feature.condamg] below. Everything else is unaffected, because `default` does not use it.
+
+[workspace]
+name = "madlad-conda-spike"
+version = "0.1.0"
+channels = ["conda-forge"]
+platforms = ["linux-64"]   # add "linux-aarch64" once linux-64 passes
+
+[dependencies]
+python = "3.11.*"
+numpy = "*"
+uproot = "*"            # reads the Delphes ROOT output without needing ROOT itself
+pythia8 = ">=8.3"
+lhapdf = ">=6.5"
+fastjet = ">=3.4"
+delphes = ">=3.5"
+hepmc2 = "*"
+# MG5 NLO compiles process-specific Fortran at run time and links it against the libraries
+# above, so the compilers must come from the same environment (this is the ABI risk).
+c-compiler = "*"
+cxx-compiler = "*"
+fortran-compiler = "*"
+make = "*"
+patch = "*"
+wget = "*"
+curl = "*"
+
+[feature.condamg.dependencies]
+mg5amcnlo = "*"
+# [feature.condamg] channels = ["conda-forge", "<channel-that-hosts-mg5amcnlo>"]
+
+[environments]
+conda-mg5 = { features = ["condamg"], solve-group = "conda-mg5" }
+
+[tasks]
+check      = "python scripts/check_env.py"
+fetch-mg5  = "bash scripts/fetch_mg5_tarball.sh"     # fallback path only
+setup-mg5  = "bash scripts/setup_mg5.sh"             # point MG5 at the env's pythia8/lhapdf/fastjet
+pdfs       = "bash scripts/fetch_pdfs.sh"            # PDF sets into ./cache/lhapdf
+smoke-lo   = { cmd = "bash scripts/smoke.sh lo",  depends-on = ["setup-mg5", "pdfs"] }
+smoke-nlo  = { cmd = "bash scripts/smoke.sh nlo", depends-on = ["setup-mg5", "pdfs"] }
+smoke      = { cmd = "bash scripts/smoke.sh all", depends-on = ["check", "setup-mg5", "pdfs"] }

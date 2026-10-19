@@ -1,0 +1,56 @@
+name: spike
+
+on:
+  pull_request:
+  workflow_dispatch:
+    inputs:
+      run_nlo:
+        description: "Also run the (slow) NLO + shower stage"
+        type: boolean
+        default: false
+  schedule:
+    - cron: "17 5 * * 1"   # weekly: catches upstream breakage before users do
+
+jobs:
+  smoke:
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    strategy:
+      fail-fast: false
+      matrix:
+        env: [default, conda-mg5]
+    # The conda-mg5 path is the experiment; don't let it turn the whole run red while we learn.
+    continue-on-error: ${{ matrix.env == 'conda-mg5' }}
+    steps:
+      - uses: actions/checkout@v4
+
+      # Pin by tag and bump deliberately; check the action's releases page for the latest.
+      - uses: prefix-dev/setup-pixi@v0.8.1
+        with:
+          environments: ${{ matrix.env }}
+          cache: true
+
+      - name: Environment report
+        run: pixi run -e ${{ matrix.env }} check || true
+
+      - name: Fetch pinned MG5 tarball (default env only)
+        if: matrix.env == 'default'
+        run: pixi run -e default fetch-mg5
+
+      - name: LO smoke test
+        run: pixi run -e ${{ matrix.env }} smoke-lo
+
+      - name: NLO + Pythia8 + Delphes smoke test
+        if: github.event_name != 'pull_request' || inputs.run_nlo
+        run: pixi run -e ${{ matrix.env }} smoke-nlo
+
+      - name: Upload logs and manifests
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: results-${{ matrix.env }}
+          path: |
+            results/${{ matrix.env }}/**/*.log
+            results/${{ matrix.env }}/**/manifest.json
+            pixi.lock
+          if-no-files-found: ignore
