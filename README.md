@@ -1,4 +1,4 @@
-# MEG — MadGraph Event Generator
+# MEG 🦈: — MadGraph Event Generator
 
 One TOML file in, a Delphes ROOT file and a provenance manifest out.
 
