@@ -48,6 +48,25 @@ tool and prints versions. Safe to run again.
 
 Then use `pixi run meg ...`, or `pixi shell` and plain `meg ...`.
 
+## Running MG5 interactively
+
+To try things by hand, open the MG5 prompt with the same environment fixes MEG uses (compilers, library
+paths, Pythia8 interface, PDFs, open-file limit):
+
+```
+pixi run mg5                  # the MG5 prompt
+pixi run mg5 my_commands.mg5  # or run a command file (looked up relative to where you ran it)
+```
+
+(`pixi run meg mg5` is the same thing.) At the prompt, `import model sm`, `generate p p > t t~`,
+`output ttbar`, `launch` and so on work as usual.
+
+**Where things are saved:** MG5 runs in `./work`, that is a `work/` folder in the directory you run it from (created if needed;
+run it from the repository root to keep everything together), so a process you create with `output ttbar` ends up in `work/ttbar/`, with its events in `work/ttbar/Events/run_01/`.
+Use `--workdir DIR` (`pixi run meg mg5 --workdir DIR`) or `MEG_MG5_WORKDIR=DIR` to work somewhere else.
+`work/` is git-ignored and is separate from `results/`: interactive sessions never touch the runs made by
+`meg generate`, and `meg generate` never reads from `work/`.
+
 ## Commands
 
 | command | what it does |
