@@ -147,6 +147,66 @@ def _cmd_mg5(a: argparse.Namespace) -> int:
     return 0   # not reached
 
 
+def _campaign(a: argparse.Namespace):
+    from .batch.campaign import Campaign
+    return Campaign.load(a.campaign)
+
+
+def _cmd_submit(a: argparse.Namespace) -> int:
+    from .batch import submit as sub
+    overrides = list(a.overrides)
+    if a.replicas is not None:
+        overrides.append(f"execution.replicas={a.replicas}")
+    if a.seed_start is not None:
+        overrides.append(f"execution.seed_start={a.seed_start}")
+    if a.executor:
+        overrides.append(f'execution.executor="{a.executor}"')
+    cfg = load_config(a.config, overrides)
+    c = sub.submit(cfg, dry_run=a.dry_run)
+    print()
+    print(f"campaign directory: {c.dir}")
+    if cfg.execution.executor == "local" and not a.dry_run:
+        print(sub.status_text(c)[0])
+        print(f"collect the results with: meg collect {c.dir}")
+    elif not a.dry_run:
+        print(f"check progress with: meg status {c.dir}")
+    return 0
+
+
+def _cmd_status(a: argparse.Namespace) -> int:
+    from .batch import submit as sub
+    print(sub.status_text(_campaign(a))[0])
+    return 0
+
+
+def _cmd_collect(a: argparse.Namespace) -> int:
+    from .batch import collect as col
+    s = col.collect(_campaign(a), verify=a.verify)
+    print(col.summary_text(s))
+    print(f"files are in {_campaign(a).outputs}")
+    return 0 if not s["failed"] else 1
+
+
+def _cmd_resubmit(a: argparse.Namespace) -> int:
+    from .batch import submit as sub
+    todo = sub.resubmit(_campaign(a), dry_run=a.dry_run)
+    print(f"{len(todo)} replicas resubmitted" if not a.dry_run else f"{len(todo)} replicas would be resubmitted")
+    return 0
+
+
+def _cmd_cancel(a: argparse.Namespace) -> int:
+    from .batch import submit as sub
+    done = sub.cancel(_campaign(a))
+    print(f"asked HTCondor to remove cluster(s): {', '.join(map(str, done)) or 'none'}")
+    return 0
+
+
+def _cmd_job(a: argparse.Namespace) -> int:
+    """Internal: run one replica. Called by the job script and by the local executor."""
+    from .batch import job
+    return job.run_replica(Path(a.meta), Path(a.config), a.seed, Path(a.outbox))
+
+
 def _cmd_schema(a: argparse.Namespace) -> int:
     print(json_schema())
     return 0
@@ -165,7 +225,9 @@ def build_parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(prog="meg", description="MEG: MadGraph Event Generator "
                                 "(MG5_aMC + Pythia8/Herwig7 + Delphes), driven by a TOML file.")
     p.add_argument("--version", action="version", version=f"meg {__version__}")
-    sub = p.add_subparsers(dest="cmd", required=True)
+    sub = p.add_subparsers(
+        dest="cmd", required=True,           # `_job` is internal: left out of the visible command list
+        metavar="{generate,plan,doctor,setup,submit,status,collect,resubmit,cancel,model,pdf,mg5,schema,init}")
 
     r = sub.add_parser("generate", aliases=["run"], help="generate events: run the whole pipeline")
     _add_config_args(r)
@@ -203,6 +265,33 @@ def build_parser() -> argparse.ArgumentParser:
     g5.add_argument("args", nargs=argparse.REMAINDER)
     g5.set_defaults(fn=_cmd_mg5)
 
+    b = sub.add_parser("submit", help="run N replicas (different seeds) locally or on HTCondor")
+    _add_config_args(b)
+    b.add_argument("--replicas", "-n", type=int, help="number of replicas (execution.replicas)")
+    b.add_argument("--seed-start", type=int, help="seed of the first replica (default: run.seed)")
+    b.add_argument("--executor", choices=["local", "htcondor"], help="override execution.executor")
+    b.add_argument("--dry-run", action="store_true", help="write the campaign directory and scripts, submit nothing")
+    b.set_defaults(fn=_cmd_submit)
+
+    for name, fn, helptext in (("status", _cmd_status, "show how far a campaign is"),
+                               ("collect", _cmd_collect, "gather finished results under their unique names"),
+                               ("resubmit", _cmd_resubmit, "run the failed or lost replicas again"),
+                               ("cancel", _cmd_cancel, "remove a campaign's jobs from the HTCondor queue")):
+        q = sub.add_parser(name, help=helptext)
+        q.add_argument("campaign", help="campaign directory (as printed by `meg submit`)")
+        if name == "collect":
+            q.add_argument("--verify", action="store_true", help="re-check every file's checksum")
+        if name == "resubmit":
+            q.add_argument("--dry-run", action="store_true")
+        q.set_defaults(fn=fn)
+
+    j = sub.add_parser("_job")      # no help= : argparse then leaves it out of the command list
+    j.add_argument("--meta", required=True)
+    j.add_argument("--config", required=True)
+    j.add_argument("--seed", type=int, required=True)
+    j.add_argument("--outbox", required=True)
+    j.set_defaults(fn=_cmd_job)
+
     sub.add_parser("schema", help="print the JSON Schema of the configuration").set_defaults(fn=_cmd_schema)
 
     i = sub.add_parser("init", help="write an example configuration file")
@@ -214,7 +303,7 @@ def build_parser() -> argparse.ArgumentParser:
 
 def main(argv: list[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
-    if args.fn is _cmd_generate:       # `kill <pid>` should stop the tools too, not orphan them
+    if args.fn in (_cmd_generate, _cmd_job):       # `kill <pid>` should stop the tools too, not orphan them
         signal.signal(signal.SIGTERM, _on_sigterm)
     _setup_logging()
     try:

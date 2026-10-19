@@ -112,16 +112,37 @@ def _stage(ctx: RunContext, name: str, inputs_hash: str, fn: Callable[[], dict],
     return inputs_hash
 
 
-def _resolve_model(ctx: RunContext) -> models.FetchedModel | None:
+def _resolve_model(config: Config, mg5: toolchain.MG5) -> models.FetchedModel | None:
     """Built-in MG5 models are used as they are; anything else is fetched and pinned."""
-    m = ctx.plan.config.model
+    m = config.model
     inline = {k: getattr(m, k) for k in ("git", "rev", "url", "sha256", "subdir") if getattr(m, k)}
-    if not inline and ctx.mg5.is_builtin_model(m.name):
+    if not inline and mg5.is_builtin_model(m.name):
         return None
     fetched = models.fetch(m.name, inline or None, m.restriction)        # type: ignore[arg-type]
     log.warning("model %s is Python code that MG5 will execute; only use sources you trust",
                 fetched.name)
     return fetched
+
+
+def _toolchain_ready(config: Config, env, mg5: toolchain.MG5) -> None:
+    toolchain.configure_mg5(mg5, env)
+    if config.shower.kind == "pythia8":
+        toolchain.ensure_py8_interface(mg5, env)
+    if config.process.order == "NLO":
+        toolchain.ensure_loop_tools(mg5, env)
+
+
+def prepare(config: Config) -> None:
+    """Do every one-time, possibly networked step a run needs (MG5 configuration, Pythia8 interface,
+    Ninja, UFO model, PDF sets) without starting a run. `meg submit` calls this on the submit host so
+    that the jobs can run offline and never race each other to install things."""
+    env = sysenv.build_env()
+    plan = build_plan(config)
+    mg5 = toolchain.locate_mg5(env)
+    _toolchain_ready(config, env, mg5)
+    _resolve_model(config, mg5)
+    for s in plan.pdf_sets:
+        pdf.ensure(s, env)
 
 
 def run(config: Config, *, echo: str = "none", force: bool = False) -> RunResult:
@@ -139,15 +160,11 @@ def run(config: Config, *, echo: str = "none", force: bool = False) -> RunResult
         log.info(line)
 
     timings: dict = {}
-    toolchain.configure_mg5(mg5, env)
-    if config.shower.kind == "pythia8":
-        toolchain.ensure_py8_interface(mg5, env)
-    if config.process.order == "NLO":
-        toolchain.ensure_loop_tools(mg5, env)
+    _toolchain_ready(config, env, mg5)
 
     # inputs: always checked, cheap when cached
     t0 = time.time()
-    fetched = _resolve_model(ctx)
+    fetched = _resolve_model(config, mg5)
     for s in plan.pdf_sets:
         pdf.ensure(s, env)
     timings["inputs"] = round(time.time() - t0, 1)

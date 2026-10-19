@@ -1,0 +1,33 @@
+# 5000 independent replicas of ttbar (LO, dilepton via MadSpin, Pythia8, Delphes), 20k events each,
+# on HTCondor. Submit with:   pixi run meg submit examples/htcondor_campaign.toml
+# Try 3 replicas locally first:   pixi run meg submit examples/htcondor_campaign.toml --executor local -n 3
+[run]
+name = "ttbar_dilepton"
+
+[process]
+definition = "p p > t t~"
+
+[generation]
+events = 20000
+
+[madspin]
+enable = true
+define = ["l+ = e+ mu+", "l- = e- mu-", "vl = ve vm", "vl~ = ve~ vm~"]
+decays = ["t > w+ b, w+ > l+ vl", "t~ > w- b~, w- > l- vl~"]
+
+[shower]
+kind = "pythia8"
+
+[detector]
+kind = "delphes"
+card = "ATLAS"
+
+[execution]
+executor = "htcondor"
+replicas = 5000            # replica i has seed seed_start + i; seed_start defaults to run.seed
+cores = 4
+memory = "8GB"
+disk = "30GB"
+walltime = "12:00:00"
+max_running = 500          # at most 500 jobs in the queue/running at once
+retrieve = ["delphes"]     # or ["delphes", "lhe", "hepmc"], or "all" (whole run directory, one archive)

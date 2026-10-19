@@ -67,11 +67,65 @@ Use `--workdir DIR` (`pixi run meg mg5 --workdir DIR`) or `MEG_MG5_WORKDIR=DIR` 
 `work/` is git-ignored and is separate from `results/`: interactive sessions never touch the runs made by
 `meg generate`, and `meg generate` never reads from `work/`.
 
+## Many replicas on HTCondor
+
+To make N statistically independent copies of one run, each with its own random seed, use `meg submit`
+instead of `meg generate`. Each replica is an ordinary MEG run; only the seed (and the run name) differ.
+
+```
+pixi run meg submit examples/htcondor_campaign.toml            # submits the whole campaign
+pixi run meg status campaigns/ttbar_dilepton-3fa9c1d2          # what is running / done / failed
+pixi run meg collect campaigns/ttbar_dilepton-3fa9c1d2         # gather results, print combined cross-section
+pixi run meg resubmit campaigns/ttbar_dilepton-3fa9c1d2        # rerun only the failed or lost replicas
+```
+
+Try it small and locally first: `meg submit CONFIG --executor local -n 3` runs three replicas here with
+exactly the same job code the cluster runs. `--dry-run` writes the campaign directory and the HTCondor
+files (`submit.sub`, `job.sh`, `env.sh`) without submitting, so you can read them.
+
+**What you set** (all in `[execution]`, see `examples/htcondor_campaign.toml`): `executor`, `replicas`,
+`cores`, `memory`, `disk`, `walltime`, `max_running`, and `retrieve`. Settings that belong to your site
+rather than your project (accounting group, requirements, site-specific lines) go once into
+`~/.config/meg/site.toml` (or the file named by `MEG_SITE`); project configs win over it:
+
+```toml
+[execution.htcondor]
+accounting_group = "group_hep.user"
+extra = ["+JobFlavour = 'workday'"]
+```
+
+**What comes back.** Every job leaves an `outbox/` of final, uniquely named files, which HTCondor
+transfers back (also when the job failed), so `<campaign>/replicas/s0007/outbox/` holds replica 7's files.
+`meg collect` links them all into `<campaign>/outputs/` as
+`<run name>-<process id>_s<seed>.<kind>` (for example `ttbar_dilepton-3fa9c1d2_s0007.delphes.root`).
+The process id is a short hash of the physics settings, so two different configurations never share
+names. What is retrieved is your choice: `retrieve = ["delphes", "lhe", "hepmc"]` picks files, and
+`retrieve = "all"` brings the whole run directory home as one `.run.tar.gz` per replica (the full MG5
+directory has thousands of files, hence one archive). Each replica always also returns its
+`manifest.json`, a small bundle of logs/cards (`.logs.tar.gz`) and a `status.json` with checksums.
+`meg collect` prints the combined cross-section (inverse-variance weighted over replicas) with a
+chi2/ndf consistency check.
+
+**How a job runs.** `meg submit` first does every one-time, possibly networked step on the submit host
+(MG5 configuration, Pythia8 interface, Ninja, UFO models, PDF sets), then the jobs run with
+`MEG_OFFLINE=1`, so nodes need no internet and jobs cannot race each other to install things. Each job
+works in the node's scratch directory (MG5 writes thousands of small files; shared filesystems are slow
+at that), loads the MEG environment from `env.sh` (generated from `pixi shell-hook`) and runs one replica.
+
+**Assumptions.** The repository (with its `.pixi` environment) and the MEG cache (`MEG_CACHE`, default
+`~/.cache/meg`) must be readable from the worker nodes, e.g. on a shared filesystem. The campaign directory
+itself does not need to be visible to the nodes: the three small files a job needs are transferred.
+A custom Delphes card is referenced by absolute path and must be readable from the nodes as well.
+Each campaign name+physics combination is a directory; submitting it again refuses, so change `run.name`
+for a new campaign. Stop a campaign with `meg cancel`.
+
 ## Commands
 
 | command | what it does |
 |---|---|
 | `meg generate CONFIG [--set k=v ...] [-v\|-q] [--force]` | generate events (`meg run` also works). By default you see MG5's, Herwig's and Delphes' own output (minus known MG5 noise) plus one line per stage. `-v` shows all of it, `-q` hides the tools' output and keeps the stage lines. Everything is always in the log files. |
+| `meg submit CONFIG [-n N] [--seed-start S] [--executor local\|htcondor] [--dry-run]` | N replicas with seeds S..S+N-1, locally or on HTCondor (see above) |
+| `meg status\|collect\|resubmit\|cancel CAMPAIGN` | follow, gather, rerun or stop a campaign |
 | `meg plan CONFIG [--set k=v ...]` | show what a run would do, without running |
 | `meg init [FILE]` | write an example config |
 | `meg schema` | JSON Schema of the config (for editor completion) |

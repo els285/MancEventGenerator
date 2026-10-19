@@ -69,9 +69,9 @@ def locate_mg5(env: Mapping[str, str]) -> MG5:
     return MG5(launcher=launcher, root=launcher.parent.parent)
 
 
-def set_config_options(path: Path, wanted: dict[str, str]) -> bool:
+def set_config_options(path: Path, wanted: dict[str, str], write: bool = True) -> bool:
     """Set `key = value` in mg5_configuration.txt (replacing a commented-out line, or appending).
-    Returns True if the file changed."""
+    Returns True if the file changed (or, with write=False, would change)."""
     lines = path.read_text().splitlines()
     original = list(lines)
     done: set[str] = set()
@@ -85,7 +85,8 @@ def set_config_options(path: Path, wanted: dict[str, str]) -> bool:
             lines.append(f"{key} = {val}")
     if lines == original:
         return False
-    path.write_text("\n".join(lines) + "\n")
+    if write:
+        path.write_text("\n".join(lines) + "\n")
     return True
 
 
@@ -103,6 +104,8 @@ def configure_mg5(mg5: MG5, env: Mapping[str, str]) -> None:
     if (prefix / "bin" / "fastjet-config").exists():
         opts["fastjet"] = str(prefix / "bin" / "fastjet-config")
     cfg = mg5.config
+    if cfg.exists() and not set_config_options(cfg, opts, write=False):
+        return          # already configured: nothing to write (batch nodes may see a read-only tree)
     if cfg.exists() and _writable(cfg):
         if set_config_options(cfg, opts):
             log.info("configured %s", cfg)

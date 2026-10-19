@@ -7,6 +7,7 @@ sees a fully resolved configuration.
 from __future__ import annotations
 
 import json
+import os
 import re
 import tomllib
 from pathlib import Path
@@ -121,9 +122,57 @@ class OutputCfg(_Section):
     compress: bool = Field(True, description="gzip the saved files (HepMC files are very large)")
 
 
+MAX_SEED = 30081 * 30081          # the largest seed MG5 accepts
+_SIZE = re.compile(r"\d+(\.\d+)?\s?(KB|MB|GB|TB|K|M|G|T)?", re.IGNORECASE)
+
+
+class HTCondorCfg(_Section):
+    """Site-specific HTCondor settings. Put these in ~/.config/meg/site.toml once, not in every config."""
+    universe: str = Field("vanilla")
+    requirements: str | None = Field(None, description="ClassAd 'requirements' expression")
+    accounting_group: str | None = Field(None)
+    extra: list[str] = Field(
+        default_factory=list, description="Raw submit-file lines added before 'queue', e.g. "
+        "[\"+JobFlavour = 'workday'\", \"MY.SingularityImage = 'x'\"]")
+
+
 class ExecutionCfg(_Section):
-    executor: Literal["local"] = Field("local", description="Only 'local' exists in v0.1")
-    cores: int = Field(0, ge=0, description="0 = all cores")
+    executor: Literal["local", "htcondor"] = Field(
+        "local", description="Where `meg submit` runs the replicas ('meg generate' always runs one run here)")
+    cores: int = Field(0, ge=0, description="Cores per run. 0 = all cores locally, 1 in a batch job")
+    replicas: int = Field(1, ge=1, description="How many independent runs `meg submit` makes; "
+                          "replica i has seed seed_start + i")
+    seed_start: int | None = Field(None, ge=1, description="First replica's seed (default: run.seed)")
+    memory: str = Field("4GB", description="Memory request per job")
+    disk: str = Field("20GB", description="Scratch-disk request per job (20k events with HepMC need ~10 GB)")
+    walltime: str | None = Field(None, description="HH:MM:SS limit per job (sites differ in how they honour it)")
+    max_running: int | None = Field(None, ge=1, description="At most this many jobs in the queue/running at once")
+    retrieve: list[Literal["delphes", "lhe", "hepmc"]] | Literal["all"] | None = Field(
+        None, description="What to bring back from every job: a list of delphes / lhe / hepmc, or "
+        "\"all\" (the whole run directory as one archive). Default: [\"delphes\"], or [\"lhe\"] without a "
+        "detector. The manifest and logs always come back.")
+    campaign_dir: Path = Field(Path("campaigns"), description="Parent directory for campaign directories")
+    htcondor: HTCondorCfg = Field(default_factory=HTCondorCfg)
+
+    @field_validator("memory", "disk")
+    @classmethod
+    def _size(cls, v: str) -> str:
+        if not _SIZE.fullmatch(v.strip()):
+            raise ValueError("write a size like 4GB, 500MB or 2048")
+        return v.strip()
+
+    @field_validator("walltime")
+    @classmethod
+    def _walltime(cls, v: str | None) -> str | None:
+        if v is not None and not re.fullmatch(r"\d+:[0-5]\d:[0-5]\d", v):
+            raise ValueError("write walltime as HH:MM:SS, e.g. 12:00:00")
+        return v
+
+    def walltime_seconds(self) -> int | None:
+        if self.walltime is None:
+            return None
+        h, m, sec = (int(x) for x in self.walltime.split(":"))
+        return h * 3600 + m * 60 + sec
 
 
 class Config(_Section):
@@ -153,14 +202,43 @@ class Config(_Section):
             raise ValueError("output.hepmc: there is no HepMC file when shower.kind = \"none\"")
         if self.detector.kind == "delphes" and not self.detector.card:
             raise ValueError("detector.card must not be empty")
+        ex = self.execution
+        if ex.retrieve is None:
+            ex.retrieve = ["delphes"] if self.detector.kind == "delphes" else ["lhe"]
+        wanted = ex.retrieve if isinstance(ex.retrieve, list) else []
+        if "delphes" in wanted and self.detector.kind != "delphes":
+            raise ValueError("execution.retrieve: 'delphes' asked for, but detector.kind is not \"delphes\"")
+        if "hepmc" in wanted and self.shower.kind == "none":
+            raise ValueError("execution.retrieve: 'hepmc' asked for, but shower.kind is \"none\"")
+        last = self.first_seed() + ex.replicas - 1
+        if last > MAX_SEED:
+            raise ValueError(f"seeds run up to {last}, but MG5 accepts at most {MAX_SEED}")
         return self
 
+    def first_seed(self) -> int:
+        return self.execution.seed_start or self.run.seed
+
+    def seeds(self) -> list[int]:
+        return list(range(self.first_seed(), self.first_seed() + self.execution.replicas))
+
     def fingerprint(self) -> str:
-        """Identity of the physics: everything except where the output goes."""
+        """Identity of one run's physics: everything except where the output goes and how it is executed."""
         d = self.model_dump(mode="json")
         d["run"].pop("output_dir")
         d["run"].pop("name")
+        d.pop("execution")
         return sha256_json(d)
+
+    def process_id(self) -> str:
+        """Short identity of the physics shared by all replicas: like fingerprint(), but without the
+        seed and without the choice of what to keep. Two campaigns with the same name and settings
+        get the same id."""
+        d = self.model_dump(mode="json")
+        for k in ("output_dir", "name", "seed"):
+            d["run"].pop(k)
+        d.pop("execution")
+        d.pop("output")
+        return sha256_json(d)[:8]
 
 
 # --------------------------------------------------------------------------- loading
@@ -189,8 +267,36 @@ def _format_errors(e: ValidationError, source: str) -> str:
     return "\n".join(lines)
 
 
+def site_path() -> Path:
+    env = os.environ.get("MEG_SITE")
+    return Path(env).expanduser() if env else Path.home() / ".config" / "meg" / "site.toml"
+
+
+def _merge(base: dict, over: dict) -> dict:
+    out = dict(base)
+    for k, v in over.items():
+        out[k] = _merge(out[k], v) if isinstance(v, dict) and isinstance(out.get(k), dict) else v
+    return out
+
+
+def load_site() -> dict:
+    """Per-machine defaults for the [execution] table (queue, accounting group, ...). Optional."""
+    p = site_path()
+    if not p.is_file():
+        return {}
+    try:
+        data = tomllib.loads(p.read_text())
+    except tomllib.TOMLDecodeError as e:
+        raise MegError(f"{p}: not valid TOML: {e}") from e
+    extra = set(data) - {"execution"}
+    if extra:
+        raise MegError(f"{p}: only an [execution] table is allowed here, found: {', '.join(sorted(extra))}")
+    return data
+
+
 def load_config(path: str | Path | None = None, overrides: list[str] | None = None) -> Config:
-    """Read a TOML file (or start from defaults) and apply `--set a.b=c` style overrides."""
+    """Read a TOML file (or start from defaults) and apply `--set a.b=c` style overrides.
+    Machine-wide [execution] defaults from the site file sit underneath the project's own settings."""
     data: dict[str, Any] = {}
     source = "defaults"
     if path is not None:
@@ -202,6 +308,9 @@ def load_config(path: str | Path | None = None, overrides: list[str] | None = No
         except tomllib.TOMLDecodeError as e:
             raise MegError(f"{p}: not valid TOML: {e}") from e
         source = str(p)
+    site = load_site()
+    if site:
+        data["execution"] = _merge(site["execution"], data.get("execution", {}))
     for item in overrides or []:
         if "=" not in item:
             raise MegError(f"override {item!r} must look like section.key=value")
