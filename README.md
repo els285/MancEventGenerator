@@ -28,11 +28,13 @@ MEG needs [pixi](https://pixi.sh). It installs every tool from conda-forge and l
 Delphes builds.
 
 ```
-git clone <this repo> && cd MEG
-pixi install
-pixi run meg doctor        # checks every tool, prints versions
-pixi run meg setup         # one-time: configures MG5, installs its Pythia8 interface and (for NLO) the Ninja loop library (needs network; Ninja compiles from source, once)
+git clone <this repo> && cd MEG && pixi run setup
 ```
+
+That one line installs the locked environment (`pixi run` does it when it is missing), then runs the
+one-time setup: it configures MG5, installs MG5's Pythia8 interface and, for NLO, the Ninja loop
+library (compiled from source, once; needs network), and finishes with `meg doctor`, which checks every
+tool and prints versions. Safe to run again.
 
 Then use `pixi run meg ...`, or `pixi shell` and plain `meg ...`.
 

@@ -97,14 +97,14 @@ def _cmd_doctor(a: argparse.Namespace) -> int:
 
 
 def _cmd_setup(a: argparse.Namespace) -> int:
-    from . import sysenv, toolchain
+    from . import doctor, sysenv, toolchain
     env = sysenv.build_env()
     mg5 = toolchain.locate_mg5(env)
     toolchain.configure_mg5(mg5, env)
     toolchain.ensure_py8_interface(mg5, env)
     toolchain.ensure_loop_tools(mg5, env)
     print(f"MG5 ready: {mg5.launcher} (version {mg5.version()})")
-    return 0
+    return doctor.run()            # finish with the environment check, so one command is enough
 
 
 def _cmd_model(a: argparse.Namespace) -> int:
@@ -182,7 +182,7 @@ def build_parser() -> argparse.ArgumentParser:
     s.set_defaults(fn=_cmd_plan)
 
     sub.add_parser("doctor", help="check the environment").set_defaults(fn=_cmd_doctor)
-    sub.add_parser("setup", help="configure MG5; install Pythia8 interface + Ninja (NLO)").set_defaults(fn=_cmd_setup)
+    sub.add_parser("setup", help="one-time setup (MG5, Pythia8, Ninja), then check").set_defaults(fn=_cmd_setup)
 
     m = sub.add_parser("model", help="UFO models: list the registry or fetch one into the cache")
     m.add_argument("action", choices=["list", "fetch"])
