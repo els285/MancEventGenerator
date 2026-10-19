@@ -12,3 +12,4 @@ work/
 .ruff_cache/
 dist/
 *.egg-info/
+campaigns/
