@@ -177,69 +177,92 @@ the NLO value).
 
 ```bash
 ls work/ttbar_lo/Events/run_01
-zcat work/ttbar_lo/Events/run_01/unweighted_events.lhe.gz | head -80
 ```
 
-(`zcat` is `gzcat` on some Macs; `pixi shell` gives you the GNU one.)
+The events are in `unweighted_events.lhe.gz`, a compressed text file. Make an uncompressed copy to read
+(`-k` keeps the original; if your `gunzip` has no `-k`, use `gunzip -c file.gz > file`) and open it in an editor:
 
-The file is XML-like. The `<init>` block records beam types and energies, PDF identifiers and the
-**cross-section** (last line). Each `<event>` block lists the particles: a header line, then one line per
-particle with its PDG code, status, mother indices, colour flow, and five numbers `px py pz E m`
-(GeV). Status `-1` means an incoming parton, `1` a final-state particle, `2` an intermediate resonance.
+```bash
+gunzip -k work/ttbar_lo/Events/run_01/unweighted_events.lhe.gz
+nano work/ttbar_lo/Events/run_01/unweighted_events.lhe       # or: vim ...
+```
+
+In `nano`, `Ctrl+W` searches and `Ctrl+X` quits; in `vim`, `/text` searches (`n` for the next match),
+`gg` / `G` jump to the top / bottom and `:q` quits. (`gunzip -c file.gz | less` also works if you prefer a
+pager, and `gunzip -c` is the same on Linux and macOS, unlike `zcat`.) A tour, in file order:
+
+1. **The header** (`<header>` ... `</header>`). It starts with a banner and contains a copy of the cards the
+   run used. Search for `iseed`: it should show the seed you set (11). This is how every sample carries
+   its own provenance.
+2. **The init block** (search `<init>`). Two lines: beam particle codes (`2212` = proton), beam energies,
+   PDF identifiers; then the process line, whose first number is the **cross-section in pb** and the
+   second its uncertainty. Compare it with the number MG5 printed.
+3. **The first event** (search `<event>`). The first line is `NUP IDPRUP XWGTUP SCALUP AQEDUP AQCDUP`: the number of
+   particles, a process id, the **event weight**, the scale and the couplings. Then one line per
+   particle: `IDUP ISTUP MOTHUP1 MOTHUP2 ICOLUP1 ICOLUP2 PX PY PZ E M VTIMUP SPINUP`.
+   * `IDUP` is the PDG code: `21` gluon, `1..6` quarks (`-` for antiquarks), `6` the top, `11`/`13`
+     electron/muon.
+   * `ISTUP` is the status: `-1` incoming parton, `1` final state, `2` intermediate resonance.
+   * `MOTHUP` point at the parents (line numbers in the same event, counting from 1).
+   * `ICOLUP` are the colour-flow labels: matching numbers connect a colour to its anticolour.
+4. **Check the physics by eye.** The two incoming partons have no transverse momentum, so the two tops'
+   `PX` values must be equal and opposite, and the same for `PY`. Is this event gluon-gluon or
+   quark-antiquark? Is `M` the top mass in your param card?
+5. **The weights.** Look at `XWGTUP` in a few events. In an unweighted LO sample they are all the same.
+6. **The end** (`G`, or `Ctrl+W` then `</LesHouchesEvents>`). Nothing special, but notice how little
+   information per event there is: this is the hard process only.
 
 Because the top quarks are not decayed here, `6` and `-6` appear with status `1`.
 
-### 3.4 Look at the events with a few lines of Python
+### 3.4 Read the events with pylhe
 
-No extra packages are needed. Save this as `lhe_peek.py` (it works on `.lhe` and `.lhe.gz`):
+Reading a file by eye teaches the format; analysing thousands of events needs code. The standard Python
+package for LHE files is [`pylhe`](https://github.com/scikit-hep/pylhe), which is not part of MEG's base
+environment. Add it once (this edits `pixi.toml` and `pixi.lock`):
+
+```bash
+pixi add pylhe
+```
+
+These examples were written for pylhe 2.x, whose interface differs from older versions.
+Save this as `lhe_peek.py` (it reads `.lhe` and `.lhe.gz`):
 
 ```python
-import gzip
 import sys
 
+import awkward as ak
 import numpy as np
+import pylhe
 
+lhe = pylhe.LHEFile.fromfile(sys.argv[1])
+proc = lhe.init.procInfo[0]
+print(f"cross-section in the file: {proc.xSection:.6g} +- {proc.error:.2g} pb")
 
-def read_lhe(path):
-    """Yield (weight, particles) for every event. A particle is (pdg, status, px, py, pz, E, m)."""
-    opener = gzip.open if str(path).endswith(".gz") else open
-    with opener(path, "rt") as f:
-        inside, header, parts, weight = False, None, [], 1.0
-        for line in f:
-            if line.startswith("<event"):
-                inside, header, parts = True, None, []
-            elif line.startswith("</event"):
-                inside = False
-                yield weight, parts
-            elif inside and not line.startswith(("<", "#")):
-                x = line.split()
-                if header is None:                  # first line of an event: NUP, IDPRUP, XWGTUP, ...
-                    header, weight = x, float(x[2])
-                else:
-                    parts.append((int(x[0]), int(x[1]), *map(float, x[6:11])))
+events = pylhe.to_awkward(lhe.events)              # one row per event; .particles is a jagged array
+p = events.particles
+tops = p[(abs(p.id) == 6) & ((p.status == 1) | (p.status == 2))]       # the top and the anti-top
+pt = ak.flatten(tops.vector.pt)                    # .vector gives pt, eta, phi, mass, ... for free
+w = ak.flatten(ak.broadcast_arrays(events.eventinfo.weight, tops.vector.pt)[0])   # each top gets its event's weight
+pt, w = np.asarray(pt), np.asarray(w)
 
-
-tops_pt, weights = [], []
-for w, parts in read_lhe(sys.argv[1]):
-    for pdg, status, px, py, pz, e, m in parts:
-        if abs(pdg) == 6 and status in (1, 2):          # the top or anti-top
-            tops_pt.append(np.hypot(px, py))
-            weights.append(w)
-
-tops_pt, weights = np.array(tops_pt), np.array(weights)
-print(f"{len(tops_pt)} tops, weights sum to {weights.sum():.4g} (negative weights: {(weights < 0).sum()})")
-counts, edges = np.histogram(tops_pt, bins=np.arange(0, 600, 50), weights=weights)
+print(f"{len(events)} events, {len(pt)} tops, weights sum to {w.sum():.4g}, negative weights: {(w < 0).sum()}")
+counts, edges = np.histogram(pt, bins=np.arange(0, 600, 50), weights=w)
 for lo, hi, n in zip(edges[:-1], edges[1:], counts):
-    print(f"{lo:4.0f}-{hi:4.0f} GeV {'#' * int(60 * n / counts.max())} {n:.0f}")
+    print(f"{lo:4.0f}-{hi:4.0f} GeV {'#' * max(0, int(60 * n / counts.max()))} {n:.0f}")
 ```
 
 ```bash
 pixi run python lhe_peek.py work/ttbar_lo/Events/run_01/unweighted_events.lhe.gz
 ```
 
-You should see a top pT distribution that rises from zero, peaks at about 50-100 GeV and falls steeply.
-Why does it not peak at zero? (Think about the phase space and the top mass.) All LO events have
-weight +1, so there are no negative weights here. That changes at NLO.
+The first line should match the cross-section you found in the file and the one MG5 printed. The
+histogram of the top transverse momentum should rise from zero, peak at about 50-100 GeV and fall steeply.
+Why does it not peak at zero? (Think about the phase space and the top mass.) All LO events have weight
++1, so there are no negative weights here. That changes at NLO.
+
+Everything in the file is available this way: `events.particles.id`, `.status`, `.mother1`, `.vector.px`,
+`.vector.E`, `events.eventinfo.weight`, and so on. Try computing the invariant mass of the top pair and its
+rapidity separation, and compare with the transverse-momentum shape.
 
 ---
 
@@ -279,13 +302,13 @@ makes a new numbered run: `run_02`, `run_03`, ... .) Compare the first event of 
 ```bash
 for r in work/ttbar_lo/Events/run_0*; do
   echo -n "$r  "
-  zcat $r/unweighted_events.lhe.gz | sed -n '/<event>/,/<\/event>/p;/<\/event>/q' | md5sum
+  gunzip -c $r/unweighted_events.lhe.gz | sed -n '/<event>/,/<\/event>/p;/<\/event>/q' | md5sum
 done
 ```
 
 Runs 01 and 02 (same seed, same settings) should print the same checksum, and the runs with seeds 12 and
-13 different ones. (If 01 and 02 differ, compare their cross-sections: they should still agree closely.) Then use `lhe_peek.py` on each and note how the
-histograms fluctuate within the expected `1/sqrt(N)` around one common shape. This is exactly what you
+13 different ones. (If 01 and 02 differ, compare their cross-sections: they should still agree closely.)
+Then run `lhe_peek.py` on each and note how the histograms fluctuate within the expected `1/sqrt(N)` around one common shape. This is exactly what you
 exploit to split a large production into many parallel jobs with different seeds.
 
 ### 4.2 Collider and PDF inputs
@@ -377,7 +400,7 @@ ls -lh work/ttbar_lo/Events/run_0*/*.gz
 Questions:
 
 * How many particles does one event have now compared with the 2 tops of section 3? (Hint:
-  `zcat file.hepmc.gz | grep -c '^P '` for the whole file, divided by the number of events.)
+  `gunzip -c file.hepmc.gz | grep -c '^P '` for the whole file, divided by the number of events.)
 * The shower conserves the hard-process cross-section. Does the cross-section printed for this run differ
   from the unshowered one with the same seed?
 
