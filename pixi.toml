@@ -11,6 +11,9 @@ python = "3.11.*"
 pydantic = ">=2"
 numpy = "*"
 uproot = "*"            # reads the Delphes ROOT output for the run manifest (no ROOT needed)
+awkward = "*"           # jagged arrays: how uproot and pylhe hand over events (used in docs/tutorial-interactive-madgraph.md)
+vector = "*"            # four-vector arithmetic on those arrays
+pylhe = ">=2"           # reads LHE files from Python (the tutorial's examples need the 2.x interface)
 mg5amcnlo = "*"
 pythia8 = ">=8.3"
 herwig = "*"

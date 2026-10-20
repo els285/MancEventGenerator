@@ -217,14 +217,11 @@ Because the top quarks are not decayed here, `6` and `-6` appear with status `1`
 ### 3.4 Read the events with pylhe
 
 Reading a file by eye teaches the format; analysing thousands of events needs code. The standard Python
-package for LHE files is [`pylhe`](https://github.com/scikit-hep/pylhe), which is not part of MEG's base
-environment. Add it once (this edits `pixi.toml` and `pixi.lock`):
+package for LHE files is [`pylhe`](https://github.com/scikit-hep/pylhe); MEG's environment includes it
+(with `awkward`, `vector`, `uproot` and `numpy`), so there is nothing to install. If you updated an
+older clone, run `pixi install` once. The examples were written for pylhe 2.x, whose interface differs
+from older versions.
 
-```bash
-pixi add pylhe
-```
-
-These examples were written for pylhe 2.x, whose interface differs from older versions.
 Save this as `lhe_peek.py` (it reads `.lhe` and `.lhe.gz`):
 
 ```python
