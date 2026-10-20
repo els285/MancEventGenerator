@@ -4,6 +4,7 @@ from __future__ import annotations
 import gzip
 import re
 import shutil
+import tempfile
 from collections.abc import Mapping
 from pathlib import Path
 
@@ -58,3 +59,29 @@ def run(events: Path, card: Path, out_root: Path, cwd: Path, env: Mapping[str, s
              echo=echo, fail_re=FAIL)
     if not out_root.is_file():
         raise StageError(f"Delphes did not write {out_root.name}")
+
+
+def default_output(events: Path) -> Path:
+    """`ttbar.lhe.gz` -> `ttbar.delphes.root` (in the current directory)."""
+    name = events.name
+    for suffix in (".gz", ".lhe", ".hepmc", ".hepmc2", ".hepmc3"):
+        if name.endswith(suffix):
+            name = name[: -len(suffix)]
+    return Path.cwd() / f"{name}.delphes.root"
+
+
+def run_on_file(events: Path, card: Path, out_root: Path, env: Mapping[str, str], echo: str = "filtered") -> Path:
+    """Apply the Delphes detector simulation to an existing LHE or HepMC file (`meg delphes`). Works in a
+    temporary directory (the readers need an unzipped copy) and leaves the ROOT file and `<name>.log` beside
+    each other at `out_root`. Returns the log's path."""
+    out_root.parent.mkdir(parents=True, exist_ok=True)
+    log_path = out_root.with_suffix(".log")
+    with tempfile.TemporaryDirectory(prefix="meg-delphes-") as t:
+        work = Path(t)
+        try:
+            run(events, card, work / "delphes.root", work, env, echo)
+            shutil.move(work / "delphes.root", out_root)
+        finally:
+            if (work / "delphes.log").is_file():
+                shutil.copyfile(work / "delphes.log", log_path)
+    return log_path

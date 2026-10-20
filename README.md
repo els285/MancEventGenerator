@@ -67,6 +67,12 @@ Use `--workdir DIR` (`pixi run meg mg5 --workdir DIR`) or `MEG_MG5_WORKDIR=DIR` 
 `work/` is git-ignored and is separate from `results/`: interactive sessions never touch the runs made by
 `meg generate`, and `meg generate` never reads from `work/`.
 
+**Detector simulation on an existing file.** `pixi run meg delphes FILE.lhe.gz -o out.root` (or a
+`.hepmc`/`.hepmc.gz` file) applies the Delphes simulation to events you made by hand, choosing the right
+reader from the file; `--card` picks the card (default `ATLAS`). A step-by-step walkthrough of
+interactive MG5 (LO and NLO, MadSpin, showering, seeds, Delphes) is in
+[docs/tutorial-interactive-madgraph.md](docs/tutorial-interactive-madgraph.md).
+
 ## Many replicas on HTCondor
 
 To make N statistically independent copies of one run, each with its own random seed, use `meg submit`

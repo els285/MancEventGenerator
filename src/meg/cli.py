@@ -86,6 +86,26 @@ def _cmd_generate(a: argparse.Namespace) -> int:
     return 0
 
 
+def _cmd_delphes(a: argparse.Namespace) -> int:
+    """Detector simulation on an existing LHE or HepMC file."""
+    from . import delphes, manifest, sysenv
+    events = Path(a.events).expanduser().resolve()
+    if not events.is_file():
+        raise MegError(f"{a.events}: no such file")
+    out = Path(a.output).expanduser().resolve() if a.output else delphes.default_output(events)
+    if out.exists() and not a.force:
+        raise MegError(f"{out} already exists (use --force to overwrite, or -o for another name)")
+    card = delphes.resolve_card(a.card)
+    echo = "none" if a.quiet else "all" if a.verbose else "filtered"
+    log_path = delphes.run_on_file(events, card, out, sysenv.build_env(), echo)
+    info = manifest.root_summary(out)
+    print()
+    print(f"Delphes ROOT : {out}  ({info.get('entries')} entries)")
+    print(f"card         : {card}")
+    print(f"log          : {log_path}")
+    return 0
+
+
 def _cmd_plan(a: argparse.Namespace) -> int:
     print(build_plan(load_config(a.config, a.overrides)).describe())
     return 0
@@ -240,6 +260,16 @@ def build_parser() -> argparse.ArgumentParser:
                    help="hide the tools' output; show only stage progress and the summary")
     r.add_argument("--force", action="store_true", help="discard an earlier run in the same directory")
     r.set_defaults(fn=_cmd_generate)
+
+    dl = sub.add_parser("delphes", help="apply the Delphes detector simulation to an existing LHE or HepMC file")
+    dl.add_argument("events", help="an .lhe/.lhe.gz or .hepmc/.hepmc.gz file (e.g. from interactive MG5)")
+    dl.add_argument("--card", "-c", default="ATLAS", help="packaged card name or path to a .tcl (default ATLAS)")
+    dl.add_argument("--output", "-o", help="output ROOT file (default: ./<input name>.delphes.root)")
+    dl.add_argument("--force", action="store_true", help="overwrite an existing output file")
+    g = dl.add_mutually_exclusive_group()
+    g.add_argument("-v", "--verbose", action="store_true", help="show all of Delphes' output")
+    g.add_argument("-q", "--quiet", action="store_true", help="hide Delphes' output")
+    dl.set_defaults(fn=_cmd_delphes)
 
     s = sub.add_parser("plan", help="show what a run would do, without running it")
     _add_config_args(s)

@@ -1,0 +1,25 @@
+# The configuration used in docs/tutorial-interactive-madgraph.md, section 9: the same ttbar physics
+# as the interactive session, run by MEG. Flip the switches from the command line, e.g.
+#   meg generate examples/ttbar_tutorial.toml --set process.order=NLO --set madspin.enable=true
+[run]
+name = "tutorial"
+seed = 11
+
+[process]
+definition = "p p > t t~"
+order = "LO"                   # "NLO" for p p > t t~ [QCD]
+
+[generation]
+events = 2000
+
+[madspin]
+enable = false                 # true: decay the tops to dileptons with MadSpin
+define = ["l+ = e+ mu+", "l- = e- mu-", "vl = ve vm", "vl~ = ve~ vm~"]
+decays = ["t > w+ b, w+ > l+ vl", "t~ > w- b~, w- > l- vl~"]
+
+[shower]
+kind = "pythia8"               # "none" gives parton-level events (LO only)
+
+[detector]
+kind = "delphes"
+card = "ATLAS"

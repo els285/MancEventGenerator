@@ -402,3 +402,31 @@ def test_ninja_detection_and_nlo_skips_install_when_present(toolchain):
     tc.ensure_loop_tools(mg5, {})                  # nothing to do, must not start MG5
     (mg5.root / "HEPTools/ninja/lib/libninja.a").unlink()
     assert not mg5.has_ninja()
+
+
+def test_delphes_command_on_an_existing_file(toolchain, tmp_path, capsys):
+    import gzip
+    lhe = tmp_path / "ttbar.lhe.gz"
+    with gzip.open(lhe, "wt") as f:
+        f.write("<LesHouchesEvents>\n" + "<event>\nx\n</event>\n" * 4 + "</LesHouchesEvents>\n")
+    out_dir = tmp_path / "elsewhere"
+    assert cli.main(["delphes", str(lhe), "-o", str(out_dir / "mine.root"), "-q"]) == 0
+    assert (out_dir / "mine.root").is_file() and (out_dir / "mine.log").is_file()
+    assert "4 entries" in capsys.readouterr().out
+    assert cli.main(["delphes", str(lhe), "-o", str(out_dir / "mine.root")]) == 1          # refuses to overwrite
+    assert cli.main(["delphes", str(lhe), "-o", str(out_dir / "mine.root"), "--force", "-q"]) == 0
+    assert cli.main(["delphes", str(lhe), "-q"]) == 0                                       # default name, cwd
+    assert (tmp_path / "ttbar.delphes.root").is_file()
+
+
+def test_delphes_command_hepmc3_picks_the_reader_and_reports_errors(toolchain, tmp_path, monkeypatch):
+    import fake_tools
+    hep = tmp_path / "x.hepmc"
+    hep.write_text(fake_tools.hepmc_text(3, v3=True))
+    assert cli.main(["delphes", str(hep), "-q"]) == 0
+    assert "DelphesHepMC3" in (tmp_path / "x.delphes.log").read_text().split("\n")[0]
+    monkeypatch.setenv("FAKE_DELPHES_ERROR", "1")
+    assert cli.main(["delphes", str(hep), "-o", str(tmp_path / "bad.root"), "-q"]) == 1
+    assert (tmp_path / "bad.log").is_file()                                                 # log kept for diagnosis
+    assert cli.main(["delphes", str(tmp_path / "missing.lhe")]) == 1
+    assert cli.main(["delphes", str(hep), "-c", "NoSuchCard", "-o", str(tmp_path / "n.root")]) == 1
