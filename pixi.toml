@@ -23,6 +23,7 @@ lhapdf = ">=6.5"
 fastjet = ">=3.4"
 delphes = ">=3.5"
 hepmc2 = "*"
+ipykernel = "*"
 # MG5 compiles process-specific Fortran/C++ at run time and links it against the libraries above,
 # so the compilers must come from the same environment.
 c-compiler = "*"
