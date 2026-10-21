@@ -14,6 +14,8 @@ uproot = "*"            # reads the Delphes ROOT output for the run manifest (no
 awkward = "*"           # jagged arrays: how uproot and pylhe hand over events (used in docs/tutorial-interactive-madgraph.md)
 vector = "*"            # four-vector arithmetic on those arrays
 pylhe = ">=2"           # reads LHE files from Python (the tutorial's examples need the 2.x interface)
+matplotlib = "*"        # plots in the tutorial
+mplhep = "*"            # HEP plotting styles and histogram helpers on top of matplotlib
 mg5amcnlo = "*"
 pythia8 = ">=8.3"
 herwig = "*"

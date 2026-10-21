@@ -228,6 +228,8 @@ Save this as `lhe_peek.py` (it reads `.lhe` and `.lhe.gz`):
 import sys
 
 import awkward as ak
+import matplotlib.pyplot as plt
+import mplhep as hep
 import numpy as np
 import pylhe
 
@@ -241,11 +243,17 @@ tops = p[(abs(p.id) == 6) & ((p.status == 1) | (p.status == 2))]       # the top
 pt = ak.flatten(tops.vector.pt)                    # .vector gives pt, eta, phi, mass, ... for free
 w = ak.flatten(ak.broadcast_arrays(events.eventinfo.weight, tops.vector.pt)[0])   # each top gets its event's weight
 pt, w = np.asarray(pt), np.asarray(w)
-
 print(f"{len(events)} events, {len(pt)} tops, weights sum to {w.sum():.4g}, negative weights: {(w < 0).sum()}")
-counts, edges = np.histogram(pt, bins=np.arange(0, 600, 50), weights=w)
-for lo, hi, n in zip(edges[:-1], edges[1:], counts):
-    print(f"{lo:4.0f}-{hi:4.0f} GeV {'#' * max(0, int(60 * n / counts.max()))} {n:.0f}")
+
+counts, edges = np.histogram(pt, bins=np.arange(0, 600, 25), weights=w)
+hep.style.use("ROOT")
+fig, ax = plt.subplots()
+hep.histplot(counts, edges, ax=ax, histtype="step", label=f"{len(events)} events")
+ax.set_xlabel("top quark $p_T$ [GeV]")
+ax.set_ylabel("sum of event weights")
+ax.legend()
+fig.savefig("top_pt.png", dpi=150)
+print("wrote top_pt.png")
 ```
 
 ```bash
@@ -253,6 +261,8 @@ pixi run python lhe_peek.py work/ttbar_lo/Events/run_01/unweighted_events.lhe.gz
 ```
 
 The first line should match the cross-section you found in the file and the one MG5 printed. The
+script writes `top_pt.png` (open it from your file browser, or with `open top_pt.png` on a Mac or
+`xdg-open top_pt.png` on Linux). The
 histogram of the top transverse momentum should rise from zero, peak at about 50-100 GeV and fall steeply.
 Why does it not peak at zero? (Think about the phase space and the top mass.) All LO events have weight
 +1, so there are no negative weights here. That changes at NLO.
