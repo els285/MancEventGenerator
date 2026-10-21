@@ -41,7 +41,7 @@ curl -fsSL https://pixi.sh/install.sh | sh
 ```
 Then install MEG via:
 ```bash
-git clone https://github.com/els285/MancEventGenerator.git MEG
+git clone -b tutorial https://github.com/els285/MancEventGenerator.git MEG
 cd MEG
 pixi run setup          # one-off: configures MG5, Pythia8 interface and the NLO loop library; then checks
 ```
