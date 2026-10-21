@@ -33,8 +33,13 @@ depend on your machine.
 
 ## 0. Set-up
 
-You need [pixi](https://pixi.sh) and a clone of MEG (see the README). In short:
+You need [pixi](https://pixi.sh) and a clone of MEG (see the README).
+To install [pixi], open a terminal and do:
+```bash
+curl -fsSL https://pixi.sh/install.sh | sh
 
+```
+Then install MEG via:
 ```bash
 git clone https://github.com/els285/MancEventGenerator.git MEG
 cd MEG
